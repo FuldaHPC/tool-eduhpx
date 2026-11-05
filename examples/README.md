@@ -24,7 +24,7 @@ File name: `<collective>_<flat|hier>_<localities>loc_<nodes>nodes.csv`.
 
 ## How they were made
 
-`eduhpx-run ... --only-collectives` with the test program `tools/hpx_collectives` of the project (HPX master `e65a7a3`, the
+`eduhpx-run ... --only-collectives` with the test program `tools/hpx_collectives` (in this repository) (HPX master `e65a7a3`, the
 measuring MPI on Open MPI 5.0.11rc1, UCX, 4 threads per locality, one run each). Broadcast: 64 KiB, other collectives about
 4 KiB per locality, 10 repetitions (5 with 64 localities). The start-up and shutdown traffic of HPX is left out; the four
 barriers that HPX itself runs at the start and the end remain as groups.
