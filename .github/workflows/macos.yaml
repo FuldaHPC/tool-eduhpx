@@ -1,0 +1,59 @@
+name: macOS
+
+env:
+  QT_VERSION: 6.8.1
+  APP_VERSION: 0.0.1
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: mac
+          target: desktop
+          arch: clang_64
+          tools: tools_cmake
+          cache: true
+
+      - name: Configure and build
+        run: |
+          set -e
+          command -v ninja >/dev/null || (export HOMEBREW_NO_AUTO_UPDATE=1; brew install ninja)
+          cmake -S gui -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Bundle Qt (macdeployqt) and sign ad hoc
+        run: |
+          set -e
+          macdeployqt build/eduhpx.app -qmldir=gui/qml -verbose=1
+          # the QML scan pulls in the Qt SQL drivers (they need PostgreSQL libraries); EduHPX does not use SQL
+          rm -rf build/eduhpx.app/Contents/PlugIns/sqldrivers
+          codesign --force --deep --sign - --timestamp=none build/eduhpx.app
+          codesign --verify --deep --strict build/eduhpx.app
+
+      - name: Create the DMG (app, examples, link to Applications)
+        run: |
+          set -e
+          mkdir -p dmgroot/examples
+          cp -R build/eduhpx.app dmgroot/EduHPX.app
+          cp examples/*.csv examples/README.md dmgroot/examples/
+          ln -s /Applications dmgroot/Applications
+          hdiutil create -volname "EduHPX_${APP_VERSION}" -srcfolder dmgroot -ov -format UDZO EduHPX_${APP_VERSION}.dmg
+          ls -l EduHPX_${APP_VERSION}.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EduHPX-macOS
+          path: EduHPX_${{ env.APP_VERSION }}.dmg

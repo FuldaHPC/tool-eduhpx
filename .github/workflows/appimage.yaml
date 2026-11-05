@@ -1,0 +1,62 @@
+name: AppImage
+
+env:
+  QT_VERSION: 6.8.1
+  APP_VERSION: 0.0.1
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: 'linux'
+          target: 'desktop'
+          arch: 'linux_gcc_64'
+          tools: 'tools_cmake'
+          cache: true
+
+      - name: Install system libraries
+        run: |
+          sudo apt update
+          sudo apt install -y libgl1-mesa-dev libxkbcommon-dev libgtk-3-dev libfuse2
+
+      - name: Configure CMake
+        run: cmake -S gui -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+
+      - name: Compile
+        run: cmake --build build -j$(nproc)
+
+      - name: Create AppDir with executable and examples
+        run: DESTDIR=$PWD/AppDir cmake --install build
+
+      - name: Download and run linuxdeploy
+        run: |
+          # EduHPX does not use SQL: keep the Qt SQL drivers (which need database libraries) out of the AppImage
+          rm -rf "${QT_PLUGIN_PATH}/sqldrivers" || true
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export QML_SOURCES_PATHS=${{ github.workspace }}/gui/qml
+          export DEPLOY_PLATFORM_THEMES=true
+          export LINUXDEPLOY_OUTPUT_VERSION=${APP_VERSION}
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt \
+            -d gui/EduHPX.desktop -i gui/assets/EduHPX.png --output appimage
+          ls -l *.AppImage
+          mv EduHPX-*.AppImage EduHPX_${APP_VERSION}-x86_64.AppImage
+
+      - name: Upload AppImage as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EduHPX-AppImage
+          path: EduHPX_${{ env.APP_VERSION }}-x86_64.AppImage

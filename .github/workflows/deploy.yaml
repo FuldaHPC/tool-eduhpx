@@ -1,0 +1,57 @@
+# Builds EduHPX for Linux, macOS and Windows and publishes the files as a GitHub release.
+# Runs on every push to the branch "deploy". To release: merge main into deploy and push.
+name: Deploy EduHPX
+
+env:
+  APP_VERSION: 0.0.1
+
+on:
+  push:
+    branches:
+      - 'deploy'
+  workflow_dispatch:
+
+jobs:
+  appimage:
+    uses: ./.github/workflows/appimage.yaml
+  macos:
+    uses: ./.github/workflows/macos.yaml
+  windows:
+    uses: ./.github/workflows/windows.yaml
+
+  release:
+    needs: [appimage, macos, windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Download the three builds
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          merge-multiple: true
+
+      - name: Example run files as one zip
+        run: |
+          cd examples
+          zip -r ../release-files/EduHPX_${APP_VERSION}_examples.zip *.csv README.md
+
+      - name: List the release files
+        run: ls -l release-files
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: EduHPX_${{ env.APP_VERSION }}
+          body: |
+            EduHPX ${{ env.APP_VERSION }}: viewer for HPX parcels and MPI messages on one timeline.
+            - Linux: `EduHPX_${{ env.APP_VERSION }}-x86_64.AppImage` (make it executable, then start it)
+            - macOS: `EduHPX_${{ env.APP_VERSION }}.dmg` (not signed: right click, Open)
+            - Windows: `EduHPX_${{ env.APP_VERSION }}-windows.zip` (unpack, start `eduhpx.exe`)
+            - `EduHPX_${{ env.APP_VERSION }}_examples.zip`: the example run files (they are also built into the app: File > Examples)
+          files: release-files/*
+          fail_on_unmatched_files: true

@@ -1,0 +1,50 @@
+name: Windows
+
+env:
+  QT_VERSION: 6.8.1
+  APP_VERSION: 0.0.1
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_mingw
+          tools: 'tools_mingw1310 tools_cmake tools_ninja'
+          cache: true
+
+      - name: Configure and build
+        run: |
+          cmake -G "Ninja" -S gui -B windows-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build windows-build
+
+      - name: Collect the program, Qt and the examples (windeployqt)
+        run: |
+          windeployqt --qmldir gui/qml --dir release windows-build/eduhpx.exe
+          move windows-build/eduhpx.exe release\
+          mkdir release\examples
+          copy examples\*.csv release\examples\
+          copy examples\README.md release\examples\
+          copy LICENSE release\
+          copy THIRD_PARTY_NOTICES.md release\
+
+      - name: Zip
+        run: Compress-Archive -Path release\* -DestinationPath EduHPX_${{ env.APP_VERSION }}-windows.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EduHPX-Windows
+          path: EduHPX_${{ env.APP_VERSION }}-windows.zip
