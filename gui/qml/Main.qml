@@ -80,6 +80,8 @@ ApplicationWindow {
     property bool hasDataClass: false    // the group has large (data) and small (request) messages
     // broadcast model: who asked whom (tree) and the critical path
     property bool hasTree: false
+    readonly property bool pathOn: hasTree && pathLength > 0
+    readonly property real groupSpan: groups.length > 0 ? groups[current].end - groups[current].start : 0
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
     property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
@@ -645,7 +647,7 @@ ApplicationWindow {
         // what is in this group: how many messages, how much data, where the time goes
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 126
+            Layout.preferredHeight: hpxWindow.pathOn ? 150 : 100
             visible: run.loaded && hpxWindow.groups.length > 0
             color: "#3a3a3a"
             border.color: "#2b2b2b"
@@ -666,37 +668,65 @@ ApplicationWindow {
                                   + hpxWindow.maxFanOut + " (L#" + hpxWindow.fanOutLoc + ")" }
                     Label { color: "#999999"; text: "whole run: " + hpxWindow.runParcels + " messages, " + hpxWindow.fmtSize(hpxWindow.runBytes) }
                 }
+                // 1. the real time: the critical path of a broadcast, the chain that sets its length (percent of THIS time)
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 22
-                    Label { color: "#999999"; text: "sum over messages:" }
-                    Label { color: hpxWindow.mpiColor; font.bold: true
-                            text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) + "  (" + hpxWindow.pct(hpxWindow.sumMpi) + ")" }
-                    Label { color: hpxWindow.recvColor; font.bold: true
-                            text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) + "  (" + hpxWindow.pct(hpxWindow.sumHpx) + ")" }
-                    Label { color: hpxWindow.waitColor; font.bold: true; visible: hpxWindow.sumWait > 0
-                            text: "waiting for data " + hpxWindow.fmtUs(hpxWindow.sumWait) + "  (" + hpxWindow.pct(hpxWindow.sumWait) + ")" }
-                    Label { color: "#bbbbbb"; Layout.fillWidth: true; elide: Text.ElideRight
-                            text: hpxWindow.rows.length > 0 ? "per message: MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi / hpxWindow.rows.length)
-                                                              + ", HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx / hpxWindow.rows.length) : "" }
-                }
-                // the critical path of a broadcast: the chain that sets its length
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 18
-                    visible: hpxWindow.hasTree && hpxWindow.pathLength > 0
+                    spacing: 14
+                    visible: hpxWindow.pathOn
                     Label { color: "#ffd600"; font.bold: true
-                            text: "critical path " + hpxWindow.fmtUs(hpxWindow.pathLength) + " (from +" + hpxWindow.fmtUs(hpxWindow.pathStart) + " to +" + hpxWindow.fmtUs(hpxWindow.pathEnd) + ")" }
-                    Label { color: hpxWindow.preColor; text: "HPX prepares " + hpxWindow.fmtUs(hpxWindow.pathPrepare) }
-                    Label { color: hpxWindow.mpiColor; text: "MPI " + hpxWindow.fmtUs(hpxWindow.pathMpi) }
-                    Label { color: hpxWindow.recvColor; text: "HPX picks up " + hpxWindow.fmtUs(hpxWindow.pathPick) }
-                    Label { color: hpxWindow.actionColor; text: "action " + hpxWindow.fmtUs(hpxWindow.pathAction) }
+                            text: "Critical path " + hpxWindow.fmtUs(hpxWindow.pathLength) + " of " + hpxWindow.fmtUs(hpxWindow.groupSpan) }
                     Label { color: "#bbbbbb"; Layout.fillWidth: true; elide: Text.ElideRight; text: hpxWindow.pathChain }
                 }
-                // the same time as one bar: HPX prepares | MPI | HPX picks it up | action
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
+                    visible: hpxWindow.pathOn
+                    readonly property real total: Math.max(hpxWindow.pathPrepare + hpxWindow.pathMpi + hpxWindow.pathPick + hpxWindow.pathAction, 1e-9)
+                    Repeater {
+                        model: [
+                            {name: "HPX prepares", v: hpxWindow.pathPrepare, c: hpxWindow.preColor},
+                            {name: "MPI", v: hpxWindow.pathMpi, c: hpxWindow.mpiColor},
+                            {name: "HPX picks up", v: hpxWindow.pathPick, c: hpxWindow.recvColor},
+                            {name: "action", v: hpxWindow.pathAction, c: hpxWindow.actionColor}
+                        ]
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            property real before: {
+                                let b = 0;
+                                const parts = [hpxWindow.pathPrepare, hpxWindow.pathMpi, hpxWindow.pathPick, hpxWindow.pathAction];
+                                for (let i = 0; i < index; ++i)
+                                    b += parts[i];
+                                return b;
+                            }
+                            x: parent.width * before / parent.total
+                            width: Math.max(parent.width * modelData.v / parent.total, 0)
+                            height: parent.height
+                            color: modelData.c
+                            Label {
+                                anchors.centerIn: parent
+                                color: "black"
+                                font.pixelSize: 11
+                                visible: parent.width > 100
+                                text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + (100 * modelData.v / parent.parent.total).toFixed(0) + " %)"
+                            }
+                        }
+                    }
+                }
+                // 2. the work of all messages added up: they overlap, so this is more than the real time
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 18
+                    Label { color: "#999999"; text: hpxWindow.pathOn ? "All messages added up (they overlap):" : "All messages added up:" }
+                    Label { color: hpxWindow.mpiColor; font.bold: true; text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) }
+                    Label { color: hpxWindow.recvColor; font.bold: true; text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) }
+                    Label { color: hpxWindow.waitColor; font.bold: true; visible: hpxWindow.sumWait > 0
+                            text: "waiting for data " + hpxWindow.fmtUs(hpxWindow.sumWait) }
+                    Item { Layout.fillWidth: true }
+                }
+                Item {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: hpxWindow.pathOn ? 8 : 24
                     readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumAction, 1e-9)
                     Repeater {
                         model: [
@@ -720,11 +750,12 @@ ApplicationWindow {
                             width: Math.max(parent.width * modelData.v / parent.total, 0)
                             height: parent.height
                             color: modelData.c
+                            opacity: hpxWindow.pathOn ? 0.7 : 1
                             Label {
                                 anchors.centerIn: parent
                                 color: "black"
                                 font.pixelSize: 11
-                                visible: parent.width > 90
+                                visible: parent.width > 90 && !hpxWindow.pathOn
                                 text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + hpxWindow.pct(modelData.v) + ")"
                             }
                         }
