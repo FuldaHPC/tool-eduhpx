@@ -103,7 +103,7 @@ ApplicationWindow {
     property real pathPick: 0
     property real pathAction: 0
     property real pathParent: 0          // the request waits at the parent until the reply is created
-    readonly property color parentColor: "#9c5a2c"       // a request waits at its parent: warm brown
+    readonly property color parentColor: "#c98a5e"       // a request waits at its parent: warm brown
     property string pathChain: ""
 
     // "the send request is still open": dark green with diagonal stripes in the green of the send, so that it cannot be
