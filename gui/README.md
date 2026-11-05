@@ -36,7 +36,7 @@ collectives, grey bursts, the white one is the group you look at.
 |---|---|
 | *By locality* | One lane per locality, in time. Arrows connect a send to its receive. The first lane (the root of a broadcast) is drawn in several rows, one per message. |
 | *By message* | One row per message (`L4 > L0 246 B get`): the whole life of every message below each other. |
-| *Tree* | The broadcast as a tree of localities (with many localities the tree shrinks and shows the times of an edge when you hover it): white arrows carry the data from the parent, orange arrows are the requests to the parent, the numbers are the time of each hop. |
+| *Tree* | A collective as a tree of localities (a star if it is flat): for a broadcast or scatter the data moves down, for a reduce or gather up (with many localities the tree shrinks and shows the times of an edge when you hover it): white arrows carry the data from the parent, orange arrows are the requests to the parent, the numbers are the time of each hop. |
 | *Critical path* | Switches the summary to the critical path and marks it in gold in the views (on/off). |
 | *Arrows* | All, only *Data* (the large messages) or only *Requests*. |
 | *Reset zoom* | Mouse wheel zooms, dragging moves; this resets. |

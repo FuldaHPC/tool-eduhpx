@@ -76,6 +76,7 @@ ApplicationWindow {
     property bool hasDataClass: false    // the group has large (data) and small (request) messages
     // broadcast model: who asked whom (tree) and the critical path
     property bool hasTree: false
+    property bool treeUp: false          // the data of the tree moves up (reduce, gather) instead of down
     readonly property bool pathOn: hasTree && pathLength > 0
     readonly property bool showPath: pathOn && criticalOn      // summary: the critical path (real time), else all messages added up
     property int pathHops: 0
@@ -414,6 +415,7 @@ ApplicationWindow {
         for (const r of rows)
             r.crit = false;
         hasTree = false;
+        treeUp = false;
         treeEdges = [];
         treeNodes = [];
         treeNodeMap = ({});
@@ -423,6 +425,10 @@ ApplicationWindow {
         pathChain = "";
         treeHover = -1;
         const g = groups[current];
+        if (g && g.kind !== "broadcast" && g.kind !== "burst") {
+            buildGenericTree(g);
+            return;
+        }
         if (!g || g.kind !== "broadcast" || !hasDataClass)
             return;
         const into = {};
@@ -540,6 +546,146 @@ ApplicationWindow {
         pathPick = pick;
         pathAction = act;
         pathParent = par;
+        pathHops = hops.length;
+        const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
+        for (let i = hops.length - 1; i >= 0; --i)
+            names.push(hops[i].dst);
+        pathChain = names.map(l => "L#" + l).join(" → ");
+    }
+
+    // Tree of any other collective (reduce, gather, scatter, ...; also the star of a flat one). Every edge of the tree
+    // carries two messages, one each way; the larger one is the data and its direction says whether the data moves up
+    // (reduce, gather) or down (scatter ...) the tree. The critical path is the chain that finishes the group.
+    function buildGenericTree(g) {
+        const pairs = {};
+        for (const r of rows) {
+            const key = Math.min(r.src, r.dst) + "-" + Math.max(r.src, r.dst);
+            (pairs[key] = pairs[key] || []).push(r);
+        }
+        const dataOf = {}, reqOf = {};
+        const nodes = {};
+        let pairCount = 0;
+        for (const key of Object.keys(pairs)) {
+            const ms = pairs[key].slice().sort((a, b) => b.size - a.size);
+            const d = ms[0];
+            const q = ms.find(m => m.src === d.dst && m.dst === d.src);
+            nodes[d.src] = nodes[d.dst] = true;
+            dataOf[key] = d;
+            reqOf[key] = q;
+            ++pairCount;
+        }
+        const nodeCount = Object.keys(nodes).length;
+        if (nodeCount < 3 || pairCount !== nodeCount - 1)
+            return;                                          // not a tree
+        const inDeg = {}, outDeg = {};
+        for (const key of Object.keys(dataOf)) {
+            const d = dataOf[key];
+            outDeg[d.src] = (outDeg[d.src] || 0) + 1;
+            inDeg[d.dst] = (inDeg[d.dst] || 0) + 1;
+        }
+        const noIn = Object.keys(nodes).filter(l => !inDeg[l]);
+        const noOut = Object.keys(nodes).filter(l => !outDeg[l]);
+        let up;
+        if (noOut.length === 1)
+            up = true;                                       // the data moves towards the root
+        else if (noIn.length === 1)
+            up = false;
+        else
+            return;
+        const root = parseInt(up ? noOut[0] : noIn[0]);
+        const edges = [], children = {}, parentRow = {};
+        for (const key of Object.keys(dataOf)) {
+            const d = dataOf[key];
+            const p = up ? d.dst : d.src, c = up ? d.src : d.dst;
+            edges.push({p: p, c: c, data: d, req: reqOf[key], up: up});
+            (children[p] = children[p] || []).push(c);
+            parentRow[c] = d;
+        }
+        // layout: depth = level, x = position among the leaves; the tree must reach every node from the root
+        const map = {};
+        let leaf = 0, maxDepth = 0;
+        const place = (loc, depth) => {
+            maxDepth = Math.max(maxDepth, depth);
+            const kids = (children[loc] || []).slice().sort((a, b) => a - b);
+            let x;
+            if (kids.length === 0) {
+                x = leaf++;
+            } else {
+                let sum = 0;
+                for (const k of kids)
+                    sum += place(k, depth + 1);
+                x = sum / kids.length;
+            }
+            map[loc] = {loc: loc, depth: depth, x: x, leaf: kids.length === 0};
+            return x;
+        };
+        place(root, 0);
+        if (Object.keys(map).length !== nodeCount)
+            return;
+        treeNodeMap = map;
+        treeNodes = Object.keys(map).map(k => map[k]);
+        treeEdges = edges;
+        treeLeaves = Math.max(leaf, 1);
+        treeDepth = maxDepth;
+        treeStart = g.start;
+        treeUp = up;
+        hasTree = true;
+
+        // critical path: from the data message that arrives last, back over what each sender waited for
+        let last = null, lastEnd = -Infinity;
+        for (const e of edges) {
+            const r = e.data, t = Math.max(r.t1, r.tr, r.td);
+            if (t > lastEnd) { lastEnd = t; last = r; }
+        }
+        const segs = [], hops = [];
+        const add = (kind, a, b, row) => {
+            row.crit = true;
+            if (b > a)
+                segs.push({kind: kind, a: a, b: b});
+        };
+        let cur = last, final = true, guard = 0;
+        while (cur && guard++ < 64) {
+            hops.push(cur);
+            if (final) {
+                add("action", cur.tr, cur.td, cur);
+                add("pick", cur.t1, cur.tr, cur);
+                final = false;
+            }
+            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
+            add("prepare", cur.tc >= 0 ? cur.tc : cur.t0s, cur.t0s, cur);
+            let from = null;                                  // what the sender had to wait for
+            if (up) {
+                for (const e of edges)
+                    if (e.p === cur.src && e.data.t1 <= (cur.tc >= 0 ? cur.tc : cur.t0s) + 20 && (from === null || e.data.t1 > from.t1))
+                        from = e.data;
+            } else {
+                const pr = parentRow[cur.src];
+                if (pr && pr.t1 <= (cur.tc >= 0 ? cur.tc : cur.t0s) + 20)
+                    from = pr;
+            }
+            if (from) {
+                add("pick", from.t1, from.tr, from);
+                add("action", from.tr, Math.max(cur.tc >= 0 ? cur.tc : cur.t0s, from.tr), from);   // the combining / forwarding at that locality
+            }
+            cur = from;
+        }
+        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0;
+        for (const sg of segs) {
+            a0 = Math.min(a0, sg.a);
+            if (sg.kind === "prepare") prep += sg.b - sg.a;
+            else if (sg.kind === "mpi") mpi += sg.b - sg.a;
+            else if (sg.kind === "pick") pick += sg.b - sg.a;
+            else act += sg.b - sg.a;
+        }
+        pathSegs = segs;
+        pathLength = lastEnd - a0;
+        pathStart = a0 - g.start;
+        pathEnd = lastEnd - g.start;
+        pathPrepare = prep;
+        pathMpi = mpi;
+        pathPick = pick;
+        pathAction = act;
+        pathParent = 0;
         pathHops = hops.length;
         const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
         for (let i = hops.length - 1; i >= 0; --i)
@@ -724,7 +870,7 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 color: "black"
                                 font.pixelSize: 11
-                                visible: parent.width > 100
+                                visible: parent.width > implicitWidth + 10
                                 text: modelData.name + (modelData.name === "MPI" && hpxWindow.pathHops > 1 ? " (" + hpxWindow.pathHops + " hops)" : "") + " " + hpxWindow.fmtUs(modelData.v) + " (" + (100 * modelData.v / parent.parent.total).toFixed(0) + " %)"
                             }
                         }
@@ -775,7 +921,7 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 color: "black"
                                 font.pixelSize: 11
-                                visible: parent.width > 90 && !hpxWindow.showPath
+                                visible: parent.width > implicitWidth + 10 && !hpxWindow.showPath
                                 text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + hpxWindow.pct(modelData.v) + ")"
                             }
                         }
@@ -1164,15 +1310,25 @@ ApplicationWindow {
                         const onPath = crit && e.data.crit;
                         const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,255,255,0.3)" : "#ffffff"));
                         const reqColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
-                        arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, Math.max((2 + Math.min(Math.sqrt(e.data.size) / 150, 2)) * sc, 1) + (onPath || hot ? 1 : 0), dataColor);
-                        if (e.req)
-                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, Math.max(1.2 * sc, 0.8) + (onPath || hot ? 1 : 0), reqColor);
+                        const wData = Math.max((2 + Math.min(Math.sqrt(e.data.size) / 150, 2)) * sc, 1) + (onPath || hot ? 1 : 0);
+                        const wReq = Math.max(1.2 * sc, 0.8) + (onPath || hot ? 1 : 0);
+                        if (e.up) {                                    // the data moves up: it uses the line from the child to the parent
+                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wData, dataColor);
+                            if (e.req)
+                                arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wReq, reqColor);
+                        } else {
+                            arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wData, dataColor);
+                            if (e.req)
+                                arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wReq, reqColor);
+                        }
                         // the time this hop took: from the arrival at the parent (or the request, at the root) to the arrival here
                         const up = hpxWindow.treeNodeMap[e.p] ? e.data : null;
                         let from = e.req ? e.req.tc : hpxWindow.treeStart;
                         for (const o of hpxWindow.treeEdges)
                             if (o.c === e.p)
                                 from = o.data.t1;
+                        if (e.up)                                      // data moving up: from the parcel created to its arrival
+                            from = e.data.tc >= 0 ? e.data.tc : e.data.t0s;
                         // 62 % along the edge, so that the labels of many edges that start in one node do not run into each other
                         if (!compact || hot)
                             label(ctx, "+" + hpxWindow.fmtUs(e.data.t1 - from), g.dx0 + (g.dx1 - g.dx0) * 0.62 + 14, g.dy0 + (g.dy1 - g.dy0) * 0.62 + 4,
@@ -1181,9 +1337,15 @@ ApplicationWindow {
                     for (const n of hpxWindow.treeNodes) {
                         const x = nx(n), y = ny(n);
                         let arrive = null;
-                        for (const e of hpxWindow.treeEdges)
-                            if (e.c === n.loc)
+                        for (const e of hpxWindow.treeEdges) {
+                            if (hpxWindow.treeUp) {                    // up: when the node had the data of all its children
+                                if (e.p === n.loc)
+                                    arrive = Math.max(arrive === null ? -Infinity : arrive, e.data.t1 - hpxWindow.treeStart);
+                            } else if (e.c === n.loc) {
                                 arrive = e.data.t1 - hpxWindow.treeStart;
+                            }
+                        }
+                        const isRoot = n.depth === 0;
                         const onPath = crit && hpxWindow.pathChain.indexOf("L#" + n.loc + " ") >= 0 || (crit && hpxWindow.pathChain.endsWith("L#" + n.loc));
                         ctx.fillStyle = "#2f2f2f";
                         ctx.beginPath(); ctx.arc(x, y, nodeR, 0, 2 * Math.PI); ctx.fill();
@@ -1204,16 +1366,18 @@ ApplicationWindow {
                             hotChild = hpxWindow.treeEdges[hpxWindow.treeHover].c === n.loc;
                         if (!compact)
                             // to the left of the node: the edges to the parent and to the children leave it above and below
-                            label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb");
+                            { if (hpxWindow.treeUp) { if (arrive !== null) label(ctx, (isRoot ? "root, " : "") + "all data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb");
+                                                      else if (isRoot) label(ctx, "root", x - nodeR - 7, y + 4, "right", "#bbbbbb"); }
+                              else label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb"); }
                         else if (hotChild && arrive !== null)
                             label(ctx, "data +" + hpxWindow.fmtUs(arrive), x, y + nodeR + 14, "center", "#ffffff");
-                        else if (arrive === null)
+                        else if (isRoot)
                             label(ctx, "root", x - nodeR - 6, y + 4, "right", "#bbbbbb");
                     }
                     ctx.textAlign = "left";
                     ctx.fillStyle = "#999999";
                     ctx.font = "11px sans-serif";
-                    ctx.fillText("white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the broadcast"
+                    ctx.fillText((hpxWindow.treeUp ? "white: data to the parent   orange: the message back   +t: time of the hop   all data +t: the node had the data of all its children" : "white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the group")
                                  + (compact ? "   (many localities: hover an edge for its times)" : ""), 14, height - 14);
                 }
 
