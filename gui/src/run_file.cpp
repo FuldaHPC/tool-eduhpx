@@ -55,6 +55,16 @@ void RunFile::fail(const QString &message)
     emit changed();
 }
 
+void RunFile::unload()
+{
+    m_loaded = false;
+    m_name.clear();
+    m_meta.clear();
+    m_messages.clear();
+    m_error.clear();
+    emit changed();
+}
+
 bool RunFile::load(const QUrl &url)
 {
     QString path;

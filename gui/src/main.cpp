@@ -87,6 +87,8 @@ int main(int argc, char *argv[])
     }
     if (rendering) {
         auto *window = qobject_cast<QQuickWindow *>(root);
+        if (qEnvironmentVariable("EDUHPX_START_PAGE") == QLatin1String("1"))
+            QMetaObject::invokeMethod(root, "showStartPage");   // test: back to the start page after a run was loaded
         if (qEnvironmentVariable("EDUHPX_CRITICAL") == QLatin1String("1"))
             root->setProperty("criticalOn", true);    // preview with the critical path button on
         // the views are named after the positional arguments that follow the file

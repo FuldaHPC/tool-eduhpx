@@ -29,6 +29,7 @@ ApplicationWindow {
         Menu {
             title: "File"
             MenuItem { text: "Open run file..."; onTriggered: fileDialog.open() }
+            MenuItem { text: "Start page"; enabled: run.loaded; onTriggered: run.unload() }
             MenuItem { text: "Examples..."; onTriggered: examplesDialog.open() }
             MenuSeparator { }
             MenuItem { text: "Quit"; onTriggered: Qt.quit() }
@@ -176,6 +177,9 @@ ApplicationWindow {
     // open a run file (a URL; also called from the command line and by drag and drop)
     function openFile(url) {
         run.load(url);
+    }
+    function showStartPage() {          // also used by the headless preview
+        run.unload();
     }
     // for the headless preview (eduhpx --render): show a group / a view
     function showGroup(kind, k) {
@@ -773,6 +777,11 @@ ApplicationWindow {
             Button {
                 text: "Open run..."
                 onClicked: fileDialog.open()
+            }
+            Button {
+                text: "Start page"
+                visible: run.loaded
+                onClicked: run.unload()
             }
             Label {
                 Layout.fillWidth: true
@@ -1577,15 +1586,18 @@ ApplicationWindow {
         }
     }
 
-    // start screen: the logo, open a file, and the examples that are built in
+    // start screen: the logo, open a file, and the examples that are built in (in their own frame)
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
+        anchors.topMargin: 84          // below the bar with the Open button, inside the dark area
+        anchors.leftMargin: 20
+        anchors.rightMargin: 20
+        anchors.bottomMargin: 16
         visible: !run.loaded
-        spacing: 10
+        spacing: 12
         Image {
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredHeight: Math.max(120, Math.min(220, hpxWindow.height * 0.26))
+            Layout.preferredHeight: Math.max(100, Math.min(180, hpxWindow.height * 0.22))
             Layout.preferredWidth: Layout.preferredHeight * sourceSize.width / Math.max(1, sourceSize.height)
             source: "qrc:/qt/qml/EduHPX/assets/logo.png"
             fillMode: Image.PreserveAspectFit
@@ -1595,19 +1607,40 @@ ApplicationWindow {
         RowLayout {
             Layout.alignment: Qt.AlignHCenter
             spacing: 14
-            Label { color: "#cccccc"; text: "Open a run file (.csv) or drop it here, or start with an example:" }
+            Label { color: "#cccccc"; text: "Open a run file (.csv) or drop it here" }
             Button { text: "Open run file..."; onClicked: fileDialog.open() }
         }
-        ScrollView {
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.maximumWidth: 980
             Layout.alignment: Qt.AlignHCenter
-            clip: true
-            contentWidth: availableWidth
-            ExampleList {
-                width: parent.width - 16
-                onChosen: (file) => hpxWindow.openFile(file)
+            Layout.topMargin: 8
+            color: "#363636"
+            border.color: "#5a5a5a"
+            radius: 4
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+                    Label { color: "white"; font.bold: true; font.pixelSize: 20; text: "Examples" }
+                    Label { Layout.fillWidth: true; color: "#aaaaaa"; elide: Text.ElideRight
+                            text: "every HPX collective, flat and as a tree, built into the program" }
+                }
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#5a5a5a" }
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: availableWidth
+                    ExampleList {
+                        width: parent.width - 16
+                        onChosen: (file) => hpxWindow.openFile(file)
+                    }
+                }
             }
         }
     }
