@@ -467,7 +467,7 @@ ApplicationWindow {
                     sum += place(k, depth + 1);
                 x = sum / kids.length;
             }
-            map[loc] = {loc: loc, depth: depth, x: x};
+            map[loc] = {loc: loc, depth: depth, x: x, leaf: kids.length === 0};
             return x;
         };
         place(root, 0);
@@ -1106,9 +1106,20 @@ ApplicationWindow {
                 visible: hpxWindow.viewMode === "tree"
                 readonly property int padX: 120
                 readonly property int padTop: 56
-                readonly property int padBottom: 70
+                // many localities: the tree adapts to the room it has. sp = horizontal room per leaf; below 100 px the labels would
+                // run into each other, so the nodes and arrows shrink, the leaves alternate between two heights, and the
+                // times of an edge are only written for the edge under the mouse
+                readonly property real sp: (width - 2 * padX) / Math.max(hpxWindow.treeLeaves - 1, 1)
+                readonly property bool compact: sp < 100
+                readonly property real sc: Math.max(0.45, Math.min(1, sp / 100))
+                readonly property real nodeR: Math.max(8, 17 * sc)
+                readonly property real stagger: compact ? Math.max(26, 44 * sc) : 0
+                readonly property int padBottom: compact ? 110 : 70
                 function nx(n) { return padX + (width - 2 * padX) * (hpxWindow.treeLeaves > 1 ? n.x / (hpxWindow.treeLeaves - 1) : 0.5); }
-                function ny(n) { return padTop + (height - padTop - padBottom) * (hpxWindow.treeDepth > 0 ? n.depth / hpxWindow.treeDepth : 0); }
+                function ny(n) {
+                    return padTop + (height - padTop - padBottom) * (hpxWindow.treeDepth > 0 ? n.depth / hpxWindow.treeDepth : 0)
+                           + (compact && n.leaf ? (Math.round(n.x) % 2) * stagger : 0);
+                }
                 function label(ctx, text, x, y, align, color) {
                     ctx.textAlign = align;
                     const w = ctx.measureText(text).width;
@@ -1121,7 +1132,7 @@ ApplicationWindow {
                 // arrow: the head grows with the width of the line and the shaft ends inside the head (a shaft that runs to the
                 // tip pokes out in front of the head)
                 function arrowHead(ctx, x0, y0, x1, y1, w, color) {
-                    const ang = Math.atan2(y1 - y0, x1 - x0), h = 8 + w * 2.6;
+                    const ang = Math.atan2(y1 - y0, x1 - x0), h = 8 * sc + w * 2.6;
                     const bx = x1 - h * 0.8 * Math.cos(ang), by = y1 - h * 0.8 * Math.sin(ang);
                     ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w;
                     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, by); ctx.stroke();
@@ -1135,8 +1146,8 @@ ApplicationWindow {
                     const pn = hpxWindow.treeNodeMap[e.p], cn = hpxWindow.treeNodeMap[e.c];
                     const x0 = nx(pn), y0 = ny(pn), x1 = nx(cn), y1 = ny(cn);
                     const len = Math.max(Math.hypot(x1 - x0, y1 - y0), 1);
-                    const ox = -(y1 - y0) / len * 5, oy = (x1 - x0) / len * 5;
-                    const r = 18, ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+                    const ox = -(y1 - y0) / len * 5 * sc, oy = (x1 - x0) / len * 5 * sc;
+                    const r = nodeR + 1, ux = (x1 - x0) / len, uy = (y1 - y0) / len;
                     return {dx0: x0 + ux * r + ox, dy0: y0 + uy * r + oy, dx1: x1 - ux * (r + 4) + ox, dy1: y1 - uy * (r + 4) + oy,
                             qx0: x1 - ux * r - ox, qy0: y1 - uy * r - oy, qx1: x0 + ux * (r + 4) - ox, qy1: y0 + uy * (r + 4) - oy,
                             mx: (x0 + x1) / 2, my: (y0 + y1) / 2};
@@ -1156,11 +1167,11 @@ ApplicationWindow {
                         const e = hpxWindow.treeEdges[i], g = edgeGeometry(e);
                         const hot = i === hpxWindow.treeHover;
                         const onPath = crit && e.data.crit;
-                        const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
+                        const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,255,255,0.3)" : "#ffffff"));
                         const reqColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
-                        arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, 2 + Math.min(Math.sqrt(e.data.size) / 150, 2) + (onPath || hot ? 1 : 0), dataColor);
+                        arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, Math.max((2 + Math.min(Math.sqrt(e.data.size) / 150, 2)) * sc, 1) + (onPath || hot ? 1 : 0), dataColor);
                         if (e.req)
-                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, 1.2 + (onPath || hot ? 1 : 0), reqColor);
+                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, Math.max(1.2 * sc, 0.8) + (onPath || hot ? 1 : 0), reqColor);
                         // the time this hop took: from the arrival at the parent (or the request, at the root) to the arrival here
                         const up = hpxWindow.treeNodeMap[e.p] ? e.data : null;
                         let from = e.req ? e.req.tc : hpxWindow.treeStart;
@@ -1168,8 +1179,9 @@ ApplicationWindow {
                             if (o.c === e.p)
                                 from = o.data.t1;
                         // 62 % along the edge, so that the labels of many edges that start in one node do not run into each other
-                        label(ctx, "+" + hpxWindow.fmtUs(e.data.t1 - from), g.dx0 + (g.dx1 - g.dx0) * 0.62 + 14, g.dy0 + (g.dy1 - g.dy0) * 0.62 + 4,
-                              "left", "#dddddd");
+                        if (!compact || hot)
+                            label(ctx, "+" + hpxWindow.fmtUs(e.data.t1 - from), g.dx0 + (g.dx1 - g.dx0) * 0.62 + 14, g.dy0 + (g.dy1 - g.dy0) * 0.62 + 4,
+                                  "left", "#dddddd");
                     }
                     for (const n of hpxWindow.treeNodes) {
                         const x = nx(n), y = ny(n);
@@ -1179,21 +1191,35 @@ ApplicationWindow {
                                 arrive = e.data.t1 - hpxWindow.treeStart;
                         const onPath = crit && hpxWindow.pathChain.indexOf("L#" + n.loc + " ") >= 0 || (crit && hpxWindow.pathChain.endsWith("L#" + n.loc));
                         ctx.fillStyle = "#2f2f2f";
-                        ctx.beginPath(); ctx.arc(x, y, 17, 0, 2 * Math.PI); ctx.fill();
+                        ctx.beginPath(); ctx.arc(x, y, nodeR, 0, 2 * Math.PI); ctx.fill();
                         ctx.strokeStyle = onPath ? "#ffd600" : "#cccccc"; ctx.lineWidth = onPath ? 3 : 1.5;
-                        ctx.beginPath(); ctx.arc(x, y, 17, 0, 2 * Math.PI); ctx.stroke();
+                        ctx.beginPath(); ctx.arc(x, y, nodeR, 0, 2 * Math.PI); ctx.stroke();
                         ctx.fillStyle = "#ffffff";
-                        ctx.font = "bold 11px sans-serif";
                         ctx.textAlign = "center";                  // label() leaves its own alignment set
-                        ctx.fillText("L#" + n.loc, x, y + 4);
+                        if (nodeR >= 15) {
+                            ctx.font = "bold 11px sans-serif";
+                            ctx.fillText("L#" + n.loc, x, y + 4);
+                        } else {                                   // small node: only the number
+                            ctx.font = "bold " + Math.round(nodeR * 1.0) + "px sans-serif";
+                            ctx.fillText(String(n.loc), x, y + nodeR * 0.35);
+                        }
                         ctx.font = "10px sans-serif";
-                        // to the left of the node: the edges to the parent and to the children leave it above and below
-                        label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - 24, y + 4, "right", "#bbbbbb");
+                        let hotChild = false;
+                        if (hpxWindow.treeHover >= 0)
+                            hotChild = hpxWindow.treeEdges[hpxWindow.treeHover].c === n.loc;
+                        if (!compact)
+                            // to the left of the node: the edges to the parent and to the children leave it above and below
+                            label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb");
+                        else if (hotChild && arrive !== null)
+                            label(ctx, "data +" + hpxWindow.fmtUs(arrive), x, y + nodeR + 14, "center", "#ffffff");
+                        else if (arrive === null)
+                            label(ctx, "root", x - nodeR - 6, y + 4, "right", "#bbbbbb");
                     }
                     ctx.textAlign = "left";
                     ctx.fillStyle = "#999999";
                     ctx.font = "11px sans-serif";
-                    ctx.fillText("white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the broadcast", 14, height - 14);
+                    ctx.fillText("white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the broadcast"
+                                 + (compact ? "   (many localities: hover an edge for its times)" : ""), 14, height - 14);
                 }
 
                 MouseArea {
