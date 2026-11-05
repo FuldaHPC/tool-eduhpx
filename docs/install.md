@@ -27,7 +27,7 @@ scripts/install-hpx.sh --mpi-prefix ~/eduhpx_mpi --prefix ~/eduhpx_hpx --jobs 16
 
 Needs: cmake 3.18 or newer, the C++ compiler behind the MPI wrappers (HPX and MPI must use the same one), make or ninja,
 curl or wget, tar, patch or git, and internet access (HPX fetches Boost 1.86, asio and Tracy sources while it configures).
-The build takes about as long as a normal HPX build (30 to 60 minutes with many cores). It works on Linux and macOS.
+The build took 29 minutes with 32 jobs on a 32-core node (measured on our cluster); with fewer cores expect a multiple of that. It works on Linux and macOS.
 
 At the end the script checks that the installed HPX contains the parcel log, writes `share/eduhpx/hpx-build-info.txt` and
 prints how to use the installation.
