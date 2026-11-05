@@ -16,6 +16,7 @@ jobs:
     uses: ./.github/workflows/appimage.yaml
   macos:
     uses: ./.github/workflows/macos.yaml
+    secrets: inherit      # signing secrets of the macOS build (optional)
   windows:
     uses: ./.github/workflows/windows.yaml
 
@@ -50,7 +51,7 @@ jobs:
           body: |
             EduHPX ${{ env.APP_VERSION }}: viewer for HPX parcels and MPI messages on one timeline.
             - Linux: `EduHPX_${{ env.APP_VERSION }}-x86_64.AppImage` (make it executable, then start it)
-            - macOS: `EduHPX_${{ env.APP_VERSION }}.dmg` (not signed: right click, Open)
+            - macOS: `EduHPX_${{ env.APP_VERSION }}.dmg` (if macOS blocks the app: see the README of the repository, section macOS)
             - Windows: `EduHPX_${{ env.APP_VERSION }}-windows.zip` (unpack, start `eduhpx.exe`)
             - `EduHPX_${{ env.APP_VERSION }}_examples.zip`: the example run files (they are also built into the app: File > Examples)
           files: release-files/*

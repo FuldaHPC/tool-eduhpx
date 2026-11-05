@@ -12,6 +12,14 @@ jobs:
   macos:
     runs-on: macos-14
     timeout-minutes: 30
+    env:
+      # empty if the secrets are not set: then the app is only signed ad hoc, see .github/macos/README.md
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -41,6 +49,27 @@ jobs:
           rm -rf build/eduhpx.app/Contents/PlugIns/sqldrivers
           codesign --force --deep --sign - --timestamp=none build/eduhpx.app
           codesign --verify --deep --strict build/eduhpx.app
+
+      - name: Sign with Developer ID and notarize (only if the secrets are set)
+        if: env.MACOS_CERT_P12 != ''
+        run: |
+          set -e
+          KC=$RUNNER_TEMP/eduhpx.keychain-db
+          KCPW=$(uuidgen)
+          echo "$MACOS_CERT_P12" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import $RUNNER_TEMP/cert.p12 -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" login.keychain
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements .github/macos/EduHPX.entitlements --sign "$MACOS_SIGN_IDENTITY" build/eduhpx.app
+          codesign --verify --deep --strict --verbose=2 build/eduhpx.app
+          ditto -c -k --keepParent build/eduhpx.app $RUNNER_TEMP/notarize.zip
+          xcrun notarytool submit $RUNNER_TEMP/notarize.zip --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" --password "$MACOS_NOTARY_PASSWORD" --wait
+          xcrun stapler staple build/eduhpx.app
 
       - name: Create the DMG (app, examples, link to Applications)
         run: |
