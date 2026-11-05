@@ -13,7 +13,7 @@ No database, no 3D view, no network.
     build/eduhpx.app/Contents/MacOS/eduhpx run.csv     # macOS
     build/eduhpx run.csv                               # Linux, Windows
 
-or start it without an argument and use *Open run...*, *File > Open*, drag a file onto the window, or *File > Examples*.
+or start it without an argument and use *Open run...*, *File > Open*, drag a file onto the window, or start with one of the built-in examples (the start screen lists them, *File > Examples...* too).
 
 ## A tour of the window
 
@@ -70,7 +70,7 @@ Green and red are the same colours as in the EduMPI 3D view.
 
 ## Headless preview (for tests)
 
-    QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software eduhpx ../examples/flat_broadcast_16loc_4nodes.csv \
+    QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software eduhpx ../examples/bcast_flat_16loc_4nodes.csv \
         --render out/ broadcast:3:locality broadcast:3:tree
 
 writes `out/broadcast3_locality.png` and `out/broadcast3_tree.png` (`kind:number:view`, view = locality | message | tree).

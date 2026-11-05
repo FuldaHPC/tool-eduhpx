@@ -209,6 +209,27 @@ def main():
                 return c
         return None
 
+    def take_many(candidates, size, lower, upper):
+        """A parcel with several zero-copy chunks (e.g. a vector of vectors) goes out as several MPI messages of the same
+        pair: take the latest unused ones in the time window whose sizes add up to the parcel size."""
+        chosen, total = [], 0
+        for c in reversed(candidates):
+            if c["end"] > upper:
+                continue
+            if c["end"] < lower:
+                break
+            if c["used"] or c["size"] < 1024 or c["size"] >= size:
+                continue
+            chosen.append(c)
+            total += c["size"]
+            if total > size:
+                return None
+            if total >= size - 1024:
+                for x in chosen:
+                    x["used"] = True
+                return chosen
+        return None
+
     messages = []
     unmatched_mpi = chunked = 0
     for p in sorted((p for p in sends.values() if lo <= p["tracy_send_us"] <= hi), key=lambda p: p["tracy_send_us"]):
@@ -233,28 +254,41 @@ def main():
             sc = take(send_pool.get(pair, []), chunk, lower, upper)
             is_chunk = sc is not None
         if sc is None:
+            # large parcels go out with a different header size (e.g. 18 bytes instead of 66): a message a little above the parcel size
+            sc = take(send_pool.get(pair, []), lambda sz, size=size: size <= sz <= size + 128, lower, upper)
+        if sc is None:
+            many = take_many(send_pool.get(pair, []), size, lower, upper)
+            if many:
+                last = max(c["end"] for c in many)
+                sc = {"end": last, "dur": last - min(c["end"] - c["dur"] for c in many), "size": sum(c["size"] for c in many), "multi": many}
+                is_chunk = True
+        if sc is None:
             unmatched_mpi += 1
         else:
             rec["mpi_send_end_us"] = sc["end"]
             rec["mpi_isend_us"] = sc["dur"]
             call_start = sc["end"] - sc["dur"]
-            for d in isend_done.get(pair, []):
-                if not d["used"] and abs(d["start"] - call_start) <= 3:
-                    d["used"] = True
-                    rec["mpi_send_done_us"] = d["end"]      # the send request completed (EduMPI, EDUMPI_SEND_COMPLETION)
-                    break
+            for part in sc.get("multi", [sc]):
+                start = part["end"] - part["dur"]
+                for d in isend_done.get(pair, []):
+                    if not d["used"] and abs(d["start"] - start) <= 3:
+                        d["used"] = True
+                        rec["mpi_send_done_us"] = max(d["end"], rec.get("mpi_send_done_us", 0))   # the send request completed
+                        break
             if is_chunk:
                 rec["mpi_chunk_bytes"] = sc["size"]
                 chunked += 1
             if is_chunk:
                 # zero-copy chunk: HPX already logs "parcel received" when the small header has been decoded, the data
                 # arrives later. Take the first unused receive of the same size that ends after the send call started.
-                for rc in recv_pool.get(pair, []):
-                    if not rc["used"] and rc["size"] == sc["size"] and rc["end"] >= sc["end"] - sc["dur"] - slack_us:
-                        rc["used"] = True
-                        rec["mpi_recv_end_us"] = rc["end"]
-                        rec["mpi_irecv_us"] = rc["dur"]      # post -> arrival, if EduMPI ran with EDUMPI_RECV_DURATION=1
-                        break
+                for part in sc.get("multi", [sc]):
+                    for rc in recv_pool.get(pair, []):
+                        if not rc["used"] and rc["size"] == part["size"] and rc["end"] >= part["end"] - part["dur"] - slack_us:
+                            rc["used"] = True
+                            if rc["end"] >= rec.get("mpi_recv_end_us", 0):      # the parcel has arrived with its last chunk
+                                rec["mpi_recv_end_us"] = rc["end"]
+                                rec["mpi_irecv_us"] = rc["dur"]      # post -> arrival, if EduMPI ran with EDUMPI_RECV_DURATION=1
+                            break
             elif "tracy_recv_us" in rec:
                 # a receive cannot complete before the send call has started
                 rc = take(recv_pool.get(pair, []), lambda sz, want=sc["size"]: sz == want,

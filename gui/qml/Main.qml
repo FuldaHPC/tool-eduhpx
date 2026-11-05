@@ -29,12 +29,7 @@ ApplicationWindow {
         Menu {
             title: "File"
             MenuItem { text: "Open run file..."; onTriggered: fileDialog.open() }
-            Menu {
-                title: "Examples"
-                MenuItem { text: "Flat broadcast, 16 localities on 4 nodes"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/flat_broadcast_16loc_4nodes.csv") }
-                MenuItem { text: "Tree broadcast, 16 localities on 4 nodes"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/hierarchical_broadcast_16loc_4nodes.csv") }
-                MenuItem { text: "Mixed traffic, 4 localities"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/mixed_4loc_1node.csv") }
-            }
+            MenuItem { text: "Examples..."; onTriggered: examplesDialog.open() }
             MenuSeparator { }
             MenuItem { text: "Quit"; onTriggered: Qt.quit() }
         }
@@ -1418,25 +1413,58 @@ ApplicationWindow {
         }
     }
 
-    // start screen
+    // start screen: the logo, open a file, and the examples that are built in
     ColumnLayout {
-        anchors.centerIn: parent
+        anchors.fill: parent
+        anchors.margins: 16
         visible: !run.loaded
-        spacing: 14
+        spacing: 10
         Image {
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredHeight: Math.max(160, Math.min(460, hpxWindow.height - 330))
+            Layout.preferredHeight: Math.max(120, Math.min(220, hpxWindow.height * 0.26))
             Layout.preferredWidth: Layout.preferredHeight * sourceSize.width / Math.max(1, sourceSize.height)
             source: "qrc:/qt/qml/EduHPX/assets/logo.png"
             fillMode: Image.PreserveAspectFit
             smooth: true
             mipmap: true
         }
-        Label { Layout.alignment: Qt.AlignHCenter; color: "#cccccc"; text: "Open a run file (.csv) or drop it here." }
-        Button { Layout.alignment: Qt.AlignHCenter; text: "Open run file..."; onClicked: fileDialog.open() }
-        Button { Layout.alignment: Qt.AlignHCenter; text: "Example: flat broadcast"
-                 onClicked: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/flat_broadcast_16loc_4nodes.csv") }
-        Button { Layout.alignment: Qt.AlignHCenter; text: "Example: tree broadcast"
-                 onClicked: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/hierarchical_broadcast_16loc_4nodes.csv") }
+        RowLayout {
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 14
+            Label { color: "#cccccc"; text: "Open a run file (.csv) or drop it here, or start with an example:" }
+            Button { text: "Open run file..."; onClicked: fileDialog.open() }
+        }
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.maximumWidth: 980
+            Layout.alignment: Qt.AlignHCenter
+            clip: true
+            contentWidth: availableWidth
+            ExampleList {
+                width: parent.width - 16
+                onChosen: (file) => hpxWindow.openFile(file)
+            }
+        }
+    }
+
+    Dialog {
+        id: examplesDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Examples"
+        width: Math.min(hpxWindow.width - 60, 940)
+        height: Math.min(hpxWindow.height - 60, 700)
+        standardButtons: Dialog.Close
+        ScrollView {
+            anchors.fill: parent
+            clip: true
+            contentWidth: availableWidth
+            ExampleList {
+                width: parent.width - 16
+                onChosen: (file) => { examplesDialog.close(); hpxWindow.openFile(file); }
+            }
+        }
     }
 }

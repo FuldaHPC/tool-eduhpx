@@ -73,6 +73,8 @@ def main():
     ap.add_argument("--run", default="", help="name shown in the viewer (default: the name of RUN_DIR)")
     ap.add_argument("--program", default="")
     ap.add_argument("--header-bytes", type=int, default=66)
+    ap.add_argument("--only-collectives", action="store_true",
+                    help="leave out the groups that are not a collective (start-up and shutdown traffic): small files for examples")
     a = ap.parse_args()
     run_dir = os.path.abspath(a.run_dir)
     out = a.output or os.path.join(run_dir, "run.csv")
@@ -106,9 +108,12 @@ def main():
         f.write("# " + " ".join(meta) + "\n")
         w = csv.writer(f, lineterminator="\n")
         w.writerow(cols)
-        for m in d["messages"]:
+        msgs = d["messages"]
+        if a.only_collectives:
+            msgs = [m for m in msgs if m.get("group_kind", "burst") != "burst"]
+        for m in msgs:
             w.writerow(row(m))
-    print("eduhpx-merge: %s: %d messages" % (out, len(d["messages"])))
+    print("eduhpx-merge: %s: %d messages%s" % (out, len(msgs), " (collectives only)" if a.only_collectives else ""))
 
 
 if __name__ == "__main__":

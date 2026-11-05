@@ -56,7 +56,8 @@ Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once
 
 ## Quick start
 
-1. **Try it:** download the viewer (see above), start it and choose *File > Examples*, or open a file from `examples/`.
+1. **Try it:** download the viewer (see above) and start it: the start screen lists the built-in examples, every HPX collective
+   flat and as a tree on 16 to 64 localities. Or open a file from `examples/`.
 2. **Measure your own program** (Linux cluster, tested with Slurm and Open MPI):
    1. Measuring MPI: the branch `eduhpx_mpi_data` of the [EduMPI repository](https://github.com/AnnaLena77/EduMPI), as a source
       tarball ([how it is built and updated](docs/mpi_tarball.md)). *The tarball is not published as a download yet.*

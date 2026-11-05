@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # eduhpx-run: run a program with the measuring MPI and the patched HPX and write the EduHPX run file.
 #
-#   eduhpx-run [--mpi PREFIX] [--hpx PREFIX] [--out DIR] [--name NAME] [--no-clock] -- mpirun -np 16 ./app args...
+#   eduhpx-run [--mpi PREFIX] [--hpx PREFIX] [--out DIR] [--name NAME] [--no-clock] [--clock-file F] [--only-collectives] -- mpirun -np 16 ./app args...
 #
 # It sets the environment (HPX parcel log, MPI log directory, library paths), measures the clock offsets between the
 # nodes of a Slurm job, starts the command and, when it is done, makes DIR/run.csv (eduhpx-merge). Open it with EduHPX.
 # DIR must be visible on all nodes (shared file system); the logs are small (about 1 MB per rank and second of traffic).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-MPI=${EDUHPX_MPI_PREFIX:-}; HPX=${EDUHPX_HPX_PREFIX:-}; OUT=; NAME=; CLOCK=1
+MPI=${EDUHPX_MPI_PREFIX:-}; HPX=${EDUHPX_HPX_PREFIX:-}; OUT=; NAME=; CLOCK=1; CLOCKFILE=; MERGEOPT=()
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
   case $1 in
     --mpi) MPI=$2; shift 2 ;; --hpx) HPX=$2; shift 2 ;; --out) OUT=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
-    --no-clock) CLOCK=0; shift ;; -h|--help) usage 0 ;; --) shift; break ;; *) echo "eduhpx-run: unknown option $1" >&2; usage 1 ;;
+    --no-clock) CLOCK=0; shift ;; --clock-file) CLOCKFILE=$2; shift 2 ;; --only-collectives) MERGEOPT+=(--only-collectives); shift ;; -h|--help) usage 0 ;; --) shift; break ;; *) echo "eduhpx-run: unknown option $1" >&2; usage 1 ;;
   esac
 done
 [ $# -gt 0 ] || { echo "eduhpx-run: no command (put it after --)" >&2; usage 1; }
@@ -25,7 +25,9 @@ export HPX_PARCEL_LOG="$OUT/parcels" EDUHPX_MPI_LOG_DIR="$OUT"
 if ! command -v mpirun >/dev/null 2>&1 && [ -z "${SLURM_JOB_ID:-}" ]; then echo "eduhpx-run: mpirun not found (use --mpi PREFIX)" >&2; exit 1; fi
 
 # several nodes in a Slurm job: offsets between the clocks (ping-pong, as NTP), the merge corrects the times with them
-if [ "$CLOCK" = 1 ] && [ "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ] && command -v srun >/dev/null 2>&1; then
+if [ -n "$CLOCKFILE" ]; then
+  cp "$CLOCKFILE" "$OUT/clock_offsets.csv"      # offsets measured earlier in the same job (same nodes)
+elif [ "$CLOCK" = 1 ] && [ "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ] && command -v srun >/dev/null 2>&1; then
   NODES=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
   { echo "node,index,offset_us"; echo "${NODES[0]},0,0"
     for i in $(seq 1 $((${#NODES[@]} - 1))); do
@@ -45,6 +47,6 @@ esac
 echo "eduhpx-run: logs go to $OUT"
 "${CMD[@]}"; rc=$?
 [ $rc -eq 0 ] || echo "eduhpx-run: the program ended with exit code $rc, merging what was recorded" >&2
-python3 "$HERE/eduhpx-merge" "$OUT" -o "$OUT/run.csv" --run "$NAME" || { echo "eduhpx-run: merge failed" >&2; exit 1; }
+python3 "$HERE/eduhpx-merge" "$OUT" -o "$OUT/run.csv" --run "$NAME" "${MERGEOPT[@]+"${MERGEOPT[@]}"}" || { echo "eduhpx-run: merge failed" >&2; exit 1; }
 echo "eduhpx-run: done. Open $OUT/run.csv with EduHPX."
 exit $rc

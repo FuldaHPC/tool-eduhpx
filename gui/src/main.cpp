@@ -52,6 +52,8 @@ int render(QQuickWindow *window, QObject *root, const QString &dir, const QStrin
 
 int main(int argc, char *argv[])
 {
+    // the example list (examples/index.json) is read from the program's own resources with an XMLHttpRequest
+    qputenv("QML_XHR_ALLOW_FILE_READ", "1");
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("EduHPX"));
     QGuiApplication::setApplicationVersion(QStringLiteral("0.0.1"));
