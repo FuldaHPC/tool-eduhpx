@@ -28,7 +28,7 @@ but knows nothing about parcels. **EduHPX puts both on one timeline**: for every
 | Folder | What it is |
 |---|---|
 | [`gui/`](gui/) | The viewer (Qt 6). Opens a run file and shows the timeline. Runs on macOS, Linux and Windows. [Details and a tour of the window](gui/README.md) |
-| [`scripts/`](scripts/) | Install a patched HPX and the measuring MPI, run a program and write the run file. Linux and macOS (on Windows: WSL2). *In progress.* |
+| [`scripts/`](scripts/) | Install a patched HPX (done), install the measuring MPI, run a program and write the run file (not yet). Linux and macOS. *In progress, see the README there.* |
 | [`examples/`](examples/) | Ready-made run files to try the viewer |
 | [`docs/`](docs/) | Format of the run file and of the raw MPI log, install notes |
 

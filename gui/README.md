@@ -21,12 +21,14 @@ or start it without an argument and use *Open run...*, *File > Open*, drag a fil
 bursts by pauses. `<` and `>` step through the groups. The strip under the summary shows all groups: blue-grey are
 collectives, grey bursts, the white one is the group you look at.
 
-**Summary:** number of messages and data volume of the group, and where the time went:
+**Summary:** number of messages and data volume of the group, and where the time went. The big bar has two modes:
 
-- *sum over messages* is the time of all messages added up (MPI and HPX). MPI is non-blocking, so these sums are not
-  wall-clock time; the bars show the lifetime of each message.
-- the **critical path** is the chain of messages that decided when the group finished, with its split into
-  *HPX prepares*, *MPI*, *HPX picks up* and *action*. For a broadcast this is the number that matters.
+- *Default: the time of all messages added up* (MPI, HPX, waiting). The messages run in parallel, so this is more than
+  wall-clock time; it is not CPU time either, because it contains waiting (open sends, requests waiting at their
+  parent). Below it: MPI and HPX time per message, with the pure transfer time of MPI in brackets.
+- *With the Critical path button on:* the chain of messages that decided when the broadcast finished, in **wall-clock
+  time** ("2.70 ms of 4.87 ms"), split into *HPX prepares*, *MPI* (with the number of hops), *HPX picks up*, *request
+  waits at parent* and *action*. The added-up time moves into a small second line.
 
 **Views**
 
@@ -34,8 +36,8 @@ collectives, grey bursts, the white one is the group you look at.
 |---|---|
 | *By locality* | One lane per locality, in time. Arrows connect a send to its receive. The first lane (the root of a broadcast) is drawn in several rows, one per message. |
 | *By message* | One row per message (`L4 > L0 246 B get`): the whole life of every message below each other. |
-| *Tree* | The broadcast as a tree of localities: white arrows carry the data from the parent, orange arrows are the requests to the parent, the numbers are the time of each hop. |
-| *Critical path* | Highlights the critical path in the view (on/off). |
+| *Tree* | The broadcast as a tree of localities (with many localities the tree shrinks and shows the times of an edge when you hover it): white arrows carry the data from the parent, orange arrows are the requests to the parent, the numbers are the time of each hop. |
+| *Critical path* | Switches the summary to the critical path and marks it in gold in the views (on/off). |
 | *Arrows* | All, only *Data* (the large messages) or only *Requests*. |
 | *Reset zoom* | Mouse wheel zooms, dragging moves; this resets. |
 
