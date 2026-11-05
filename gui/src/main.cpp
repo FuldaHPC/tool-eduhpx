@@ -85,6 +85,8 @@ int main(int argc, char *argv[])
     }
     if (rendering) {
         auto *window = qobject_cast<QQuickWindow *>(root);
+        if (qEnvironmentVariable("EDUHPX_CRITICAL") == QLatin1String("0"))
+            root->setProperty("criticalOn", false);   // preview of the summary without the critical path
         // the views are named after the positional arguments that follow the file
         QStringList specs = args.mid(1);
         wait(500);

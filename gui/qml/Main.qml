@@ -82,6 +82,9 @@ ApplicationWindow {
     // broadcast model: who asked whom (tree) and the critical path
     property bool hasTree: false
     readonly property bool pathOn: hasTree && pathLength > 0
+    readonly property bool showPath: pathOn && criticalOn      // summary: the critical path (real time), else all messages added up
+    property int pathHops: 0
+    property real sumWire: 0        // MPI transfer only: from the end of the send call to the end of the receive
     readonly property real groupSpan: groups.length > 0 ? groups[current].end - groups[current].start : 0
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
@@ -90,7 +93,7 @@ ApplicationWindow {
     property int treeDepth: 0
     property double treeStart: 0
     property int treeHover: -1
-    property bool criticalOn: false      // highlight the critical path in all views
+    property bool criticalOn: true       // highlight the critical path in all views and show it in the summary
     property var pathSegs: []            // { kind: prepare | mpi | pick | action, a, b }
     property real pathLength: 0
     property real pathStart: 0           // start and end of the path, after the first event of the group
@@ -302,11 +305,12 @@ ApplicationWindow {
         const dur = Math.max(g.end - g.start, 1);
         viewStart = g.start - dur * 0.03;
         viewEnd = g.end + dur * 0.03;
-        let wait = 0, pre = 0, mpi = 0, pick = 0, act = 0, par = 0, bytes = 0;
+        let wait = 0, pre = 0, mpi = 0, pick = 0, act = 0, par = 0, wire = 0, bytes = 0;
         for (const r of rows) {
             wait += r.tc >= 0 ? waitEnd(r) - r.tc : 0;
             pre += r.tc >= 0 ? r.t0s - waitEnd(r) : 0;
             mpi += Math.max(r.t0, r.t1, r.rq) - r.t0s;
+            wire += Math.max(r.t1 - r.t0, 0);
             pick += Math.max(r.tr - r.t1, 0);
             if (g.kind === "broadcast" && !r.big)
                 par += r.td >= 0 ? r.td - r.tr : 0;
@@ -320,6 +324,7 @@ ApplicationWindow {
         sumPick = pick;
         sumAction = act;
         sumParent = par;
+        sumWire = wire;
         sumHpx = pre + pick + act;
         sumBytes = bytes;
         // fan-out: to how many different localities does a sender send? Only the data direction counts (the large
@@ -419,6 +424,7 @@ ApplicationWindow {
         treeNodeMap = ({});
         pathSegs = [];
         pathLength = pathPrepare = pathMpi = pathPick = pathAction = pathParent = 0;
+        pathHops = 0;
         pathChain = "";
         treeHover = -1;
         const g = groups[current];
@@ -539,6 +545,7 @@ ApplicationWindow {
         pathPick = pick;
         pathAction = act;
         pathParent = par;
+        pathHops = hops.length;
         const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
         for (let i = hops.length - 1; i >= 0; --i)
             names.push(hops[i].dst);
@@ -661,7 +668,7 @@ ApplicationWindow {
         // what is in this group: how many messages, how much data, where the time goes
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: hpxWindow.pathOn ? 150 : 100
+            Layout.preferredHeight: hpxWindow.showPath ? 150 : 124
             visible: run.loaded && hpxWindow.groups.length > 0
             color: "#3a3a3a"
             border.color: "#2b2b2b"
@@ -686,7 +693,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 14
-                    visible: hpxWindow.pathOn
+                    visible: hpxWindow.showPath
                     Label { color: "#ffd600"; font.bold: true
                             text: "Critical path " + hpxWindow.fmtUs(hpxWindow.pathLength) + " of " + hpxWindow.fmtUs(hpxWindow.groupSpan) }
                     Label { color: "#bbbbbb"; Layout.fillWidth: true; elide: Text.ElideRight; text: hpxWindow.pathChain }
@@ -694,7 +701,7 @@ ApplicationWindow {
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
-                    visible: hpxWindow.pathOn
+                    visible: hpxWindow.showPath
                     readonly property real total: Math.max(hpxWindow.pathPrepare + hpxWindow.pathMpi + hpxWindow.pathPick + hpxWindow.pathParent + hpxWindow.pathAction, 1e-9)
                     Repeater {
                         model: [
@@ -723,7 +730,7 @@ ApplicationWindow {
                                 color: "black"
                                 font.pixelSize: 11
                                 visible: parent.width > 100
-                                text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + (100 * modelData.v / parent.parent.total).toFixed(0) + " %)"
+                                text: modelData.name + (modelData.name === "MPI" && hpxWindow.pathHops > 1 ? " (" + hpxWindow.pathHops + " hops)" : "") + " " + hpxWindow.fmtUs(modelData.v) + " (" + (100 * modelData.v / parent.parent.total).toFixed(0) + " %)"
                             }
                         }
                     }
@@ -732,7 +739,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 18
-                    Label { color: "#999999"; text: hpxWindow.pathOn ? "All messages added up (they overlap):" : "All messages added up:" }
+                    Label { color: "#999999"; text: "All messages added up (they overlap):" }
                     Label { color: hpxWindow.mpiColor; font.bold: true; text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) }
                     Label { color: hpxWindow.recvColor; font.bold: true; text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) }
                     Label { color: hpxWindow.waitColor; font.bold: true; visible: hpxWindow.sumWait > 0
@@ -743,7 +750,7 @@ ApplicationWindow {
                 }
                 Item {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: hpxWindow.pathOn ? 8 : 24
+                    Layout.preferredHeight: hpxWindow.showPath ? 8 : 24
                     readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumParent + hpxWindow.sumAction, 1e-9)
                     Repeater {
                         model: [
@@ -768,16 +775,29 @@ ApplicationWindow {
                             width: Math.max(parent.width * modelData.v / parent.total, 0)
                             height: parent.height
                             color: modelData.c
-                            opacity: hpxWindow.pathOn ? 0.7 : 1
+                            opacity: hpxWindow.showPath ? 0.7 : 1
                             Label {
                                 anchors.centerIn: parent
                                 color: "black"
                                 font.pixelSize: 11
-                                visible: parent.width > 90 && !hpxWindow.pathOn
+                                visible: parent.width > 90 && !hpxWindow.showPath
                                 text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + hpxWindow.pct(modelData.v) + ")"
                             }
                         }
                     }
+                }
+                // per message: the MPI time of a message is its whole life in MPI; the transfer is only the time on the wire
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 18
+                    visible: !hpxWindow.showPath && hpxWindow.rows.length > 0
+                    Label { color: "#999999"; text: "per message:" }
+                    Label { color: hpxWindow.mpiColor; font.bold: true
+                            text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi / Math.max(hpxWindow.rows.length, 1))
+                                  + " (transfer " + hpxWindow.fmtUs(hpxWindow.sumWire / Math.max(hpxWindow.rows.length, 1)) + ")" }
+                    Label { color: hpxWindow.recvColor; font.bold: true
+                            text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx / Math.max(hpxWindow.rows.length, 1)) }
+                    Item { Layout.fillWidth: true }
                 }
             }
         }
@@ -1325,8 +1345,8 @@ ApplicationWindow {
             }
         }
 
-        // legend and the details of what is under the mouse
-        RowLayout {
+        // legend (wraps in a narrow window) and the details of what is under the mouse
+        Flow {
             Layout.fillWidth: true
             visible: run.loaded
             spacing: 12
@@ -1353,7 +1373,6 @@ ApplicationWindow {
             Row { spacing: 5; Rectangle { width: 2; height: 14; color: "white" } Label { color: "white"; text: "send noticed by HPX" } }
             Label { color: hpxWindow.mpiColor; font.bold: true; text: "→ data (blue frame = MPI)"; visible: hpxWindow.viewMode === "locality" }
             Label { color: "#ffd600"; font.bold: true; text: "gold = critical path"; visible: hpxWindow.criticalOn && hpxWindow.hasTree }
-            Item { Layout.fillWidth: true }
         }
         Label {
             Layout.fillWidth: true
