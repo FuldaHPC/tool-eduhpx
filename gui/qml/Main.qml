@@ -6,10 +6,10 @@ import QtQuick.Dialogs
 // EduHPX: one HPX run (parcel events of HPX + MPI messages, a run file made by eduhpx-merge), shown group by
 // group (one broadcast, one barrier, one burst of other traffic, ...) in three views.
 //   By locality: one lane per locality. In its lane a locality shows what it does:
-//       dark orange  HPX prepares the send     (parcel created -> start of the MPI_Isend call)
+//       orange       HPX prepares the send     (parcel created -> start of the MPI_Isend call)
 //       blue         MPI send                  (the MPI_Isend call; light blue: HPX sees the send request still open)
 //       blue         MPI receive               (until the receive is complete)
-//       orange       HPX picks it up           (MPI has the message, HPX has not yet)
+//       light orange HPX picks it up           (MPI has the message, HPX has not yet)
 //       yellow       the action runs
 //     A blue arrow connects the MPI send of the sender with the MPI receive on the receiver.
 //   By message: one row per message with the same colours.
@@ -44,12 +44,12 @@ ApplicationWindow {
         }
     }
 
-    readonly property color preColor: "#f57c00"
+    readonly property color preColor: "#fb8c00"          // HPX prepares: orange
     readonly property color waitColor: "#8d8d8d"           // waiting for the data of the parent (a dependency, not work)
     readonly property color mpiColor: "#4fc3f7"
     readonly property color mpiSendColor: "#00ff00"        // MPI send: the green of the 3D view for 100 % sending, RGB(0, 255, 0)
     readonly property color mpiRecvColor: "#ff0000"        // MPI receive: the red of the 3D view for 100 % receiving, RGB(255, 0, 0)
-    readonly property color recvColor: "#ffb74d"
+    readonly property color recvColor: "#ffb74d"         // HPX picks up: light orange
     readonly property color actionColor: "#ffe082"
 
     property var groups: []         // { kind, k, total, rows, start, end }
@@ -93,7 +93,7 @@ ApplicationWindow {
     property int treeDepth: 0
     property double treeStart: 0
     property int treeHover: -1
-    property bool criticalOn: true       // highlight the critical path in all views and show it in the summary
+    property bool criticalOn: false      // highlight the critical path in all views and show it in the summary (button)
     property var pathSegs: []            // { kind: prepare | mpi | pick | action, a, b }
     property real pathLength: 0
     property real pathStart: 0           // start and end of the path, after the first event of the group
@@ -103,7 +103,7 @@ ApplicationWindow {
     property real pathPick: 0
     property real pathAction: 0
     property real pathParent: 0          // the request waits at the parent until the reply is created
-    readonly property color parentColor: "#9575cd"
+    readonly property color parentColor: "#9c5a2c"       // a request waits at its parent: warm brown
     property string pathChain: ""
 
     // "the send request is still open": dark green with diagonal stripes in the green of the send, so that it cannot be
@@ -695,7 +695,7 @@ ApplicationWindow {
                     spacing: 14
                     visible: hpxWindow.showPath
                     Label { color: "#ffd600"; font.bold: true
-                            text: "Critical path " + hpxWindow.fmtUs(hpxWindow.pathLength) + " of " + hpxWindow.fmtUs(hpxWindow.groupSpan) }
+                            text: "Critical path (wall clock) " + hpxWindow.fmtUs(hpxWindow.pathLength) + " of " + hpxWindow.fmtUs(hpxWindow.groupSpan) }
                     Label { color: "#bbbbbb"; Layout.fillWidth: true; elide: Text.ElideRight; text: hpxWindow.pathChain }
                 }
                 Item {
@@ -739,7 +739,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 18
-                    Label { color: "#999999"; text: "All messages added up (they overlap):" }
+                    Label { color: "#999999"; text: "Time of all messages added up (they run in parallel, so more than wall clock):" }
                     Label { color: hpxWindow.mpiColor; font.bold: true; text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) }
                     Label { color: hpxWindow.recvColor; font.bold: true; text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) }
                     Label { color: hpxWindow.waitColor; font.bold: true; visible: hpxWindow.sumWait > 0
@@ -1156,7 +1156,7 @@ ApplicationWindow {
                         const e = hpxWindow.treeEdges[i], g = edgeGeometry(e);
                         const hot = i === hpxWindow.treeHover;
                         const onPath = crit && e.data.crit;
-                        const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,255,255,0.3)" : "#ffffff"));
+                        const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
                         const reqColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
                         arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, 2 + Math.min(Math.sqrt(e.data.size) / 150, 2) + (onPath || hot ? 1 : 0), dataColor);
                         if (e.req)

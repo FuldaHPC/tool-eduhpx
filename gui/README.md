@@ -46,13 +46,14 @@ Hover a piece of work or an arrow for its numbers (size, time in MPI, what HPX d
 | | |
 |---|---|
 | grey | waits for data (the parent has not set it yet) |
-| dark orange | HPX prepares the parcel |
+| orange | HPX prepares the parcel |
 | green | MPI send call |
 | green striped | the send request is still open: MPI is still working on the message |
 | red | MPI receive |
 | blue frame | time inside MPI |
 | light orange | HPX picks up the received message |
 | yellow | the action runs |
+| brown | a request waits at its parent until the reply is created |
 | white tick | HPX notices that the message was sent |
 
 Green and red are the same colours as in the EduMPI 3D view.
