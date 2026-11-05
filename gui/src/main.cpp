@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("EduHPX"));
-    QGuiApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QGuiApplication::setApplicationVersion(QStringLiteral("0.0.1"));
     QGuiApplication::setOrganizationName(QStringLiteral("EduHPX"));
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/qt/qml/EduHPX/assets/icon_256.png")));
     QQuickStyle::setStyle(QStringLiteral("Fusion"));

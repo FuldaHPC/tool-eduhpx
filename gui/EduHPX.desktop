@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=EduHPX
+GenericName=HPX and MPI communication viewer
+Comment=HPX parcels and MPI messages on one timeline
+Exec=eduhpx
+Icon=EduHPX
+Categories=Development;Utility;
+Terminal=false

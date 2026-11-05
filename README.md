@@ -23,6 +23,19 @@ lost in HPX (waiting, scheduling, preparing the parcel) or in the transport belo
 [HPX's Tracy integration](https://v4xsh.dev/blog/gsoc-2026-hpx-tracy/) (Google Summer of Code 2026) shows tasks and threads, but not (yet) the parcels between localities. EduMPI shows the MPI messages,
 but knows nothing about parcels. **EduHPX puts both on one timeline**: for every parcel you see what HPX did and what MPI did.
 
+## Download
+
+Ready-made viewer (version 0.0.1), built by the workflows on the branch `deploy`:
+
+| System | File |
+|---|---|
+| Linux | [`EduHPX_0.0.1-x86_64.AppImage`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1-x86_64.AppImage): make it executable (`chmod +x`), then start it |
+| macOS | [`EduHPX_0.0.1.dmg`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1.dmg): the app is not signed, open it with right click > Open |
+| Windows | [`EduHPX_0.0.1-windows.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1-windows.zip): unpack, start `eduhpx.exe` |
+| Example run files | [`EduHPX_0.0.1_examples.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1_examples.zip), also built into the app: *File > Examples* |
+
+All releases: <https://github.com/FuldaHPC/tool-eduhpx/releases>. The three downloads also contain the examples.
+
 ## The parts
 
 | Folder | What it is |
