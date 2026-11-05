@@ -502,13 +502,13 @@ ApplicationWindow {
             if (b > a)
                 segs.push({kind: kind, a: a, b: b});
         };
-        let cur = last, final = true;
+        let cur = last, isFinal = true;
         while (cur) {
             hops.push(cur);
-            if (final) {
+            if (isFinal) {
                 add("action", cur.tr, cur.td, cur);
                 add("pick", cur.t1, cur.tr, cur);
-                final = false;
+                isFinal = false;
             }
             add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
             const we = waitEnd(cur);
