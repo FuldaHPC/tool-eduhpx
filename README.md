@@ -50,15 +50,22 @@ Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once
 | Folder | What it is |
 |---|---|
 | [`gui/`](gui/) | The viewer (Qt 6). Opens a run file and shows the timeline. Runs on macOS, Linux and Windows. [Details and a tour of the window](gui/README.md) |
-| [`scripts/`](scripts/) | Install a patched HPX (done), install the measuring MPI, run a program and write the run file (not yet). Linux and macOS. *In progress, see the README there.* |
+| [`scripts/`](scripts/) | `install-hpx.sh` (patched HPX), `eduhpx-run` (run a program, get `run.csv`) and `eduhpx-merge`. Tested on a Linux cluster with Slurm. [What works and what is missing](scripts/README.md) |
 | [`examples/`](examples/) | Ready-made run files to try the viewer |
-| [`docs/`](docs/) | Format of the run file and of the raw MPI log, install notes |
+| [`docs/`](docs/) | Format of the run file and of the raw MPI log, HPX install notes, the measuring MPI as a tarball |
 
 ## Quick start
 
-1. **Try it:** build the viewer (see [gui/README.md](gui/README.md)), start it and choose *File > Examples*, or open a file from `examples/`.
-2. **Measure your own program:** install the measuring MPI and the patched HPX, run your program with `eduhpx-run`,
-   open the `run.csv` it writes. *(The scripts are not finished yet, see [scripts/](scripts/).)*
+1. **Try it:** download the viewer (see above), start it and choose *File > Examples*, or open a file from `examples/`.
+2. **Measure your own program** (Linux cluster, tested with Slurm and Open MPI):
+   1. Measuring MPI: the branch `eduhpx_mpi_data` of the [EduMPI repository](https://github.com/AnnaLena77/EduMPI), as a source
+      tarball ([how it is built and updated](docs/mpi_tarball.md)). *The tarball is not published as a download yet.*
+   2. Patched HPX: `scripts/install-hpx.sh --mpi-prefix <measuring MPI> --prefix <where>` ([details](docs/install.md)).
+   3. Run: `scripts/eduhpx-run --mpi <measuring MPI> --hpx <HPX> --out my_run -- mpirun -np 16 ./app ...`, then open
+      `my_run/run.csv` with EduHPX ([details](scripts/README.md)).
+
+**Status (2026-11-05):** the viewer is released (0.0.1). The whole chain from a program to `run.csv` was tested on one
+cluster (4 nodes, 16 localities, flat and hierarchical broadcast); macOS and runs without Slurm are not tested yet.
 
 ## Screenshots
 
