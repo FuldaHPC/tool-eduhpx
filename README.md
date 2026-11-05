@@ -10,6 +10,19 @@ Collectives (broadcast ...) are grouped, drawn as a tree and analysed along thei
 
 *One broadcast of 16 localities on 4 nodes: green = MPI send, red = MPI receive, blue frame = time in MPI, the rest is HPX.*
 
+## Why EduHPX?
+
+EduHPX is the little brother of **EduMPI Suite**: [EduMPI](https://github.com/AnnaLena77/EduMPI) (an Open MPI that records
+MPI communication), EduStore (its database, a folder in the EduMPI repo) and the
+[EduMPI GUI](https://github.com/AnnaLena77/EduMPI_GUI).
+
+In [HPX](https://github.com/STEllAR-GROUP/hpx) you do not write sends and receives: HPX packs a remote call into a *parcel* and
+sends it for you, over TCP, LCI or MPI. That is convenient, but when a program gets slow, it is hard to say whether the time is
+lost in HPX (waiting, scheduling, preparing the parcel) or in the transport below it (the MPI send, the receive).
+
+[HPX's Tracy integration](https://v4xsh.dev/blog/gsoc-2026-hpx-tracy/) (Google Summer of Code 2026) shows tasks and threads, but not (yet) the parcels between localities. EduMPI shows the MPI messages,
+but knows nothing about parcels. **EduHPX puts both on one timeline**: for every parcel you see what HPX did and what MPI did.
+
 ## The parts
 
 | Folder | What it is |
