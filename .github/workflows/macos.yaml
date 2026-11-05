@@ -48,6 +48,7 @@ jobs:
           mkdir -p dmgroot/examples
           cp -R build/eduhpx.app dmgroot/EduHPX.app
           cp examples/*.csv examples/README.md dmgroot/examples/
+          cp LICENSE THIRD_PARTY_NOTICES.md dmgroot/
           ln -s /Applications dmgroot/Applications
           hdiutil create -volname "EduHPX_${APP_VERSION}" -srcfolder dmgroot -ov -format UDZO EduHPX_${APP_VERSION}.dmg
           ls -l EduHPX_${APP_VERSION}.dmg
