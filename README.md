@@ -1,29 +1,37 @@
-<p align="center"><img src="assets/logo.png" alt="EduHPX" width="260"></p>
+<p align="center"><img src="gui/assets/logo.png" alt="EduHPX" width="260"></p>
 
 # EduHPX
 
-Viewer for HPX runs: HPX parcels and the MPI messages below them on one timeline (by locality, by message, tree of a
-broadcast, critical path, summary). It reads a run file (CSV, see `docs/run_file_format.md`). No database, no 3D view.
+EduHPX shows what happens inside an [HPX](https://github.com/STEllAR-GROUP/hpx) program and in the MPI messages below it,
+on **one timeline**: when HPX prepares a parcel, when MPI sends and receives it, when HPX picks it up and runs the action.
+Collectives (broadcast ...) are grouped, drawn as a tree and analysed along their critical path.
 
-## Build (Qt 6.5 or newer, CMake)
+<p align="center"><img src="screenshots/flat_broadcast_by_locality.png" alt="One flat broadcast, by locality" width="900"></p>
 
-    cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/<platform>
-    cmake --build build
+*One broadcast of 16 localities on 4 nodes: green = MPI send, red = MPI receive, blue frame = time in MPI, the rest is HPX.*
 
-## Run
+## The parts
 
-    build/eduhpx.app/Contents/MacOS/eduhpx run.csv     # macOS;  build/eduhpx run.csv  on Linux
-    # or File > Open, drag a file onto the window, File > Examples
+| Folder | What it is |
+|---|---|
+| [`gui/`](gui/) | The viewer (Qt 6). Opens a run file and shows the timeline. Runs on macOS, Linux and Windows. [Details and a tour of the window](gui/README.md) |
+| [`scripts/`](scripts/) | Install a patched HPX and the measuring MPI, run a program and write the run file. Linux and macOS (on Windows: WSL2). *In progress.* |
+| [`examples/`](examples/) | Ready-made run files to try the viewer |
+| [`docs/`](docs/) | Format of the run file and of the raw MPI log, install notes |
 
-## Headless preview (test)
+## Quick start
 
-    QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software eduhpx examples/flat_broadcast_16loc_4nodes.csv \
-        broadcast:3:locality broadcast:3:tree --render out/
+1. **Try it:** build the viewer (see [gui/README.md](gui/README.md)), start it and choose *File > Examples*, or open a file from `examples/`.
+2. **Measure your own program:** install the measuring MPI and the patched HPX, run your program with `eduhpx-run`,
+   open the `run.csv` it writes. *(The scripts are not finished yet, see [scripts/](scripts/).)*
 
-writes `out/broadcast3_locality.png`, `out/broadcast3_tree.png` (`kind:number:view`, view = locality | message | tree).
+## Screenshots
 
-## Examples
+| Hierarchical broadcast | Tree of the broadcast |
+|---|---|
+| <img src="screenshots/hierarchical_broadcast_by_locality.png" width="440"> | <img src="screenshots/hierarchical_broadcast_tree.png" width="440"> |
 
-`examples/*.csv` were made from merged runs of the old tool with `tools/json_to_csv.py`.
+## Licence
 
-BSD-3-Clause, see LICENSE and THIRD_PARTY_NOTICES.md.
+BSD-3-Clause, see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+EduHPX is part of the Edu* tools for visualising parallel programs, like EduMPI.

@@ -14,6 +14,10 @@ qt_add_executable(eduhpx
     src/main.cpp
 )
 
+foreach(example flat_broadcast_16loc_4nodes hierarchical_broadcast_16loc_4nodes mixed_4loc_1node)
+    set_source_files_properties(../examples/${example}.csv PROPERTIES QT_RESOURCE_ALIAS examples/${example}.csv)
+endforeach()
+
 # Main.qml is served at the root of the module, so that it finds the C++ type RunFile of the module
 set_source_files_properties(qml/Main.qml PROPERTIES QT_RESOURCE_ALIAS Main.qml)
 
@@ -28,9 +32,9 @@ qt_add_qml_module(eduhpx
     RESOURCES
         assets/logo.png
         assets/icon_256.png
-        examples/flat_broadcast_16loc_4nodes.csv
-        examples/hierarchical_broadcast_16loc_4nodes.csv
-        examples/mixed_4loc_1node.csv
+        ../examples/flat_broadcast_16loc_4nodes.csv
+        ../examples/hierarchical_broadcast_16loc_4nodes.csv
+        ../examples/mixed_4loc_1node.csv
 )
 
 target_include_directories(eduhpx PRIVATE src)
