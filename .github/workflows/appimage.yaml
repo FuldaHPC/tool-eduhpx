@@ -30,11 +30,12 @@ jobs:
           sudo apt update
           sudo apt install -y libgl1-mesa-dev libxkbcommon-dev libgtk-3-dev libfuse2
 
-      - name: Configure CMake
-        run: cmake -S gui -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-
-      - name: Compile
-        run: cmake --build build -j$(nproc)
+      - name: Configure and compile
+        run: |
+          set -o pipefail
+          fail() { echo "::error title=build failed::$(grep -E 'error|Error|undefined|No such|not found' build.log | head -12 | sed 's/%/%25/g' | paste -sd '|' -)"; exit 1; }
+          cmake -S gui -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr 2>&1 | tee build.log || fail
+          cmake --build build -j$(nproc) 2>&1 | tee -a build.log || fail
 
       - name: Create AppDir with executable and examples
         run: DESTDIR=$PWD/AppDir cmake --install build

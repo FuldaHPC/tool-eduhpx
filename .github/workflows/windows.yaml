@@ -27,8 +27,14 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake -G "Ninja" -S gui -B windows-build -DCMAKE_BUILD_TYPE=Release
-          cmake --build windows-build
+          cmake -G "Ninja" -S gui -B windows-build -DCMAKE_BUILD_TYPE=Release 2>&1 | Tee-Object -FilePath build.log
+          $rc = $LASTEXITCODE
+          if ($rc -eq 0) { cmake --build windows-build 2>&1 | Tee-Object -FilePath build.log -Append; $rc = $LASTEXITCODE }
+          if ($rc -ne 0) {
+            $m = (Select-String -Path build.log -Pattern 'error|Error|undefined|No such|not found' | Select-Object -First 12 | ForEach-Object { $_.Line.Replace('%','%25') }) -join '|'
+            Write-Output "::error title=build failed::$m"
+            exit 1
+          }
 
       - name: Collect the program, Qt and the examples (windeployqt)
         run: |
