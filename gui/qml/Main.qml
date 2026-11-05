@@ -62,6 +62,7 @@ ApplicationWindow {
     property real sumMpi: 0         // MPI send / receive
     property real sumPick: 0        // HPX picks the message up
     property real sumAction: 0      // the action runs
+    property real sumParent: 0      // broadcast: the requests wait at the parent until the reply is created
     property real sumHpx: 0
     property real sumBytes: 0
     property real runBytes: 0
@@ -98,6 +99,8 @@ ApplicationWindow {
     property real pathMpi: 0
     property real pathPick: 0
     property real pathAction: 0
+    property real pathParent: 0          // the request waits at the parent until the reply is created
+    readonly property color parentColor: "#9575cd"
     property string pathChain: ""
 
     // "the send request is still open": dark green with diagonal stripes in the green of the send, so that it cannot be
@@ -164,7 +167,7 @@ ApplicationWindow {
     }
     // share of the time of all messages of this group, as text
     function pct(v) {
-        const total = sumWait + sumPre + sumMpi + sumPick + sumAction;
+        const total = sumWait + sumPre + sumMpi + sumPick + sumParent + sumAction;
         return total > 0 ? (100 * v / total).toFixed(0) + " %" : "-";
     }
     function groupLabel(g) {
@@ -276,6 +279,11 @@ ApplicationWindow {
         select(0);
     }
 
+    // broadcast: the action of a small request is the time it waits at the parent until the reply is created
+    function isRequestWait(r) {
+        return groups.length > 0 && groups[current].kind === "broadcast" && !r.big;
+    }
+
     function select(i) {
         if (groups.length === 0) {
             rows = [];
@@ -294,13 +302,16 @@ ApplicationWindow {
         const dur = Math.max(g.end - g.start, 1);
         viewStart = g.start - dur * 0.03;
         viewEnd = g.end + dur * 0.03;
-        let wait = 0, pre = 0, mpi = 0, pick = 0, act = 0, bytes = 0;
+        let wait = 0, pre = 0, mpi = 0, pick = 0, act = 0, par = 0, bytes = 0;
         for (const r of rows) {
             wait += r.tc >= 0 ? waitEnd(r) - r.tc : 0;
             pre += r.tc >= 0 ? r.t0s - waitEnd(r) : 0;
             mpi += Math.max(r.t0, r.t1, r.rq) - r.t0s;
             pick += Math.max(r.tr - r.t1, 0);
-            act += r.td >= 0 ? r.td - r.tr : 0;
+            if (g.kind === "broadcast" && !r.big)
+                par += r.td >= 0 ? r.td - r.tr : 0;
+            else
+                act += r.td >= 0 ? r.td - r.tr : 0;
             bytes += r.size;
         }
         sumWait = wait;
@@ -308,6 +319,7 @@ ApplicationWindow {
         sumMpi = mpi;
         sumPick = pick;
         sumAction = act;
+        sumParent = par;
         sumHpx = pre + pick + act;
         sumBytes = bytes;
         // fan-out: to how many different localities does a sender send? Only the data direction counts (the large
@@ -406,7 +418,7 @@ ApplicationWindow {
         treeNodes = [];
         treeNodeMap = ({});
         pathSegs = [];
-        pathLength = pathPrepare = pathMpi = pathPick = pathAction = 0;
+        pathLength = pathPrepare = pathMpi = pathPick = pathAction = pathParent = 0;
         pathChain = "";
         treeHover = -1;
         const g = groups[current];
@@ -502,19 +514,20 @@ ApplicationWindow {
             }
             const rq = asks[cur.dst];
             if (rq) {
-                add("action", rq.tr, Math.max(cur.tc, rq.tr), rq);
+                add("parent", rq.tr, Math.max(cur.tc, rq.tr), rq);
                 add("pick", rq.t1, rq.tr, rq);
                 add("mpi", rq.t0s, Math.max(rq.t0, rq.t1, rq.rq), rq);
                 add("prepare", waitEnd(rq), rq.t0s, rq);
             }
             break;
         }
-        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0;
+        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0, par = 0;
         for (const sg of segs) {
             a0 = Math.min(a0, sg.a);
             if (sg.kind === "prepare") prep += sg.b - sg.a;
             else if (sg.kind === "mpi") mpi += sg.b - sg.a;
             else if (sg.kind === "pick") pick += sg.b - sg.a;
+            else if (sg.kind === "parent") par += sg.b - sg.a;
             else act += sg.b - sg.a;
         }
         pathSegs = segs;
@@ -525,6 +538,7 @@ ApplicationWindow {
         pathMpi = mpi;
         pathPick = pick;
         pathAction = act;
+        pathParent = par;
         const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
         for (let i = hops.length - 1; i >= 0; --i)
             names.push(hops[i].dst);
@@ -681,12 +695,13 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
                     visible: hpxWindow.pathOn
-                    readonly property real total: Math.max(hpxWindow.pathPrepare + hpxWindow.pathMpi + hpxWindow.pathPick + hpxWindow.pathAction, 1e-9)
+                    readonly property real total: Math.max(hpxWindow.pathPrepare + hpxWindow.pathMpi + hpxWindow.pathPick + hpxWindow.pathParent + hpxWindow.pathAction, 1e-9)
                     Repeater {
                         model: [
                             {name: "HPX prepares", v: hpxWindow.pathPrepare, c: hpxWindow.preColor},
                             {name: "MPI", v: hpxWindow.pathMpi, c: hpxWindow.mpiColor},
                             {name: "HPX picks up", v: hpxWindow.pathPick, c: hpxWindow.recvColor},
+                            {name: "request waits at parent", v: hpxWindow.pathParent, c: hpxWindow.parentColor},
                             {name: "action", v: hpxWindow.pathAction, c: hpxWindow.actionColor}
                         ]
                         delegate: Rectangle {
@@ -694,7 +709,7 @@ ApplicationWindow {
                             required property int index
                             property real before: {
                                 let b = 0;
-                                const parts = [hpxWindow.pathPrepare, hpxWindow.pathMpi, hpxWindow.pathPick, hpxWindow.pathAction];
+                                const parts = [hpxWindow.pathPrepare, hpxWindow.pathMpi, hpxWindow.pathPick, hpxWindow.pathParent, hpxWindow.pathAction];
                                 for (let i = 0; i < index; ++i)
                                     b += parts[i];
                                 return b;
@@ -722,18 +737,21 @@ ApplicationWindow {
                     Label { color: hpxWindow.recvColor; font.bold: true; text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) }
                     Label { color: hpxWindow.waitColor; font.bold: true; visible: hpxWindow.sumWait > 0
                             text: "waiting for data " + hpxWindow.fmtUs(hpxWindow.sumWait) }
+                    Label { color: hpxWindow.parentColor; font.bold: true; visible: hpxWindow.sumParent > 0
+                            text: "requests wait at parent " + hpxWindow.fmtUs(hpxWindow.sumParent) }
                     Item { Layout.fillWidth: true }
                 }
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: hpxWindow.pathOn ? 8 : 24
-                    readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumAction, 1e-9)
+                    readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumParent + hpxWindow.sumAction, 1e-9)
                     Repeater {
                         model: [
                             {name: "waits for data", v: hpxWindow.sumWait, c: hpxWindow.waitColor},
                             {name: "HPX prepares", v: hpxWindow.sumPre, c: hpxWindow.preColor},
                             {name: "MPI", v: hpxWindow.sumMpi, c: hpxWindow.mpiColor},
                             {name: "HPX picks up", v: hpxWindow.sumPick, c: hpxWindow.recvColor},
+                            {name: "request waits at parent", v: hpxWindow.sumParent, c: hpxWindow.parentColor},
                             {name: "action", v: hpxWindow.sumAction, c: hpxWindow.actionColor}
                         ]
                         delegate: Rectangle {
@@ -741,7 +759,7 @@ ApplicationWindow {
                             required property int index
                             property real before: {
                                 let b = 0;
-                                const parts = [hpxWindow.sumWait, hpxWindow.sumPre, hpxWindow.sumMpi, hpxWindow.sumPick, hpxWindow.sumAction];
+                                const parts = [hpxWindow.sumWait, hpxWindow.sumPre, hpxWindow.sumMpi, hpxWindow.sumPick, hpxWindow.sumParent, hpxWindow.sumAction];
                                 for (let i = 0; i < index; ++i)
                                     b += parts[i];
                                 return b;
@@ -973,7 +991,7 @@ ApplicationWindow {
                             ctx.fillRect(xOf(r.t1), yr, Math.max(xOf(r.tr) - xOf(r.t1), 1.5), bh);
                         }
                         if (r.td > r.tr) {                                     // receiver: the action runs
-                            ctx.fillStyle = hpxWindow.actionColor;
+                            ctx.fillStyle = hpxWindow.isRequestWait(r) ? hpxWindow.parentColor : hpxWindow.actionColor;
                             ctx.fillRect(xOf(r.tr), yr, Math.max(xOf(r.td) - xOf(r.tr), 1.5), bh);
                         }
                         if (r.chunk && r.tr < r.t1) {                          // large parcel: HPX saw the header earlier
@@ -1261,7 +1279,7 @@ ApplicationWindow {
                             ctx.fillRect(xOf(r.t1), mid - bar / 2, Math.max(xOf(r.tr) - xOf(r.t1), 1.5), bar);
                         }
                         if (r.td > r.tr) {
-                            ctx.fillStyle = hpxWindow.actionColor;
+                            ctx.fillStyle = hpxWindow.isRequestWait(r) ? hpxWindow.parentColor : hpxWindow.actionColor;
                             ctx.fillRect(xOf(r.tr), mid - bar / 2, Math.max(xOf(r.td) - xOf(r.tr), 1.5), bar);
                         }
                         if (r.ts >= 0) {
@@ -1331,6 +1349,7 @@ ApplicationWindow {
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.mpiRecvColor; border.color: hpxWindow.mpiColor; border.width: 1.5; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "MPI receive" } }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.recvColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX picks up" } }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.actionColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "action runs" } }
+            Row { spacing: 5; visible: hpxWindow.sumParent > 0; Rectangle { width: 20; height: 10; color: hpxWindow.parentColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "request waits at parent" } }
             Row { spacing: 5; Rectangle { width: 2; height: 14; color: "white" } Label { color: "white"; text: "send noticed by HPX" } }
             Label { color: hpxWindow.mpiColor; font.bold: true; text: "→ data (blue frame = MPI)"; visible: hpxWindow.viewMode === "locality" }
             Label { color: "#ffd600"; font.bold: true; text: "gold = critical path"; visible: hpxWindow.criticalOn && hpxWindow.hasTree }
