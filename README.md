@@ -30,11 +30,20 @@ Ready-made viewer (version 0.0.1), built by the workflows on the branch `deploy`
 | System | File |
 |---|---|
 | Linux | [`EduHPX_0.0.1-x86_64.AppImage`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1-x86_64.AppImage): make it executable (`chmod +x`), then start it |
-| macOS | [`EduHPX_0.0.1.dmg`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1.dmg): the app is not signed, open it with right click > Open |
+| macOS | [`EduHPX_0.0.1.dmg`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1.dmg): the app is not signed, see the note below |
 | Windows | [`EduHPX_0.0.1-windows.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1-windows.zip): unpack, start `eduhpx.exe` |
 | Example run files | [`EduHPX_0.0.1_examples.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1_examples.zip), also built into the app: *File > Examples* |
 
 All releases: <https://github.com/FuldaHPC/tool-eduhpx/releases>. The three downloads also contain the examples.
+
+**macOS: the first start.** The app is not signed with an Apple certificate, so macOS blocks it once (it is not damaged):
+
+- macOS 14 and older: right click on `EduHPX.app` > *Open* > *Open*.
+- macOS 15 and newer: double click the app once (it is blocked), then *System Settings > Privacy & Security*, scroll down
+  to the message about EduHPX and click *Open Anyway*.
+- Or in the Terminal: `xattr -dr com.apple.quarantine /Applications/EduHPX.app`.
+
+Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once.
 
 ## The parts
 
