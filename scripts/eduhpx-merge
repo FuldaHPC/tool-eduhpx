@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""eduhpx-merge RUN_DIR [-o run.csv] [--run NAME] [--program NAME]
+
+Makes the EduHPX run file (CSV) out of the raw logs of one run:
+  parcels.loc<rank>.csv      HPX parcel log of every locality (patched HPX, HPX_PARCEL_LOG)
+  eduhpx.mpi.<rank>.bin      MPI log of every rank (measuring MPI, EDUHPX_MPI_LOG_DIR)
+  clock_offsets.csv          offsets between the nodes (written by eduhpx-run for several nodes), optional
+Standard library only. Formats: docs/mpi_log_format.md, docs/run_file_format.md."""
+import argparse
+import csv
+import glob
+import json
+import os
+import struct
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import eduhpx_merge_core as core  # noqa: E402
+
+REC = struct.Struct("<QQQqqiHHIIII")  # one 64 byte record
+HAS_DONE = 1 << 3
+
+
+def read_bin(path):
+    data = open(path, "rb").read()
+    if data[:8] != b"EDUHPXM1":
+        sys.exit("%s: not an EduHPX MPI log" % path)
+    version, rec_size, rank, _world = struct.unpack_from("<IIii", data, 8)
+    if version != 1 or rec_size != 64:
+        sys.exit("%s: unsupported log version %d" % (path, version))
+    node = data[24:56].split(b"\0")[0].decode()
+    (trailer,) = struct.unpack_from("<Q", data, 56)
+    end = trailer if trailer else len(data) - (len(data) - 64) % 64
+    funcs = []
+    if trailer and data[trailer:trailer + 8] == b"EDUHPXT1":
+        nf, _nc = struct.unpack_from("<II", data, trailer + 8)
+        funcs = [data[trailer + 16 + 32 * i:trailer + 48 + 32 * i].split(b"\0")[0].decode() for i in range(nf)]
+    recs = []
+    for off in range(64, end, 64):
+        start, endt, done, sb, rb, partner, _comm, func, flags, _sc, _rc, _seq = REC.unpack_from(data, off)
+        recs.append((funcs[func] if func < len(funcs) else "", start, endt, done, sb, rb, partner, flags))
+    return rank, node, recs
+
+
+def write_rows(run_dir):
+    """EduMPI rows in the form the merge core reads (the Isend/Irecv rows of the database version)."""
+    paths = sorted(glob.glob(os.path.join(run_dir, "eduhpx.mpi.*.bin")))
+    if not paths:
+        sys.exit("%s: no eduhpx.mpi.<rank>.bin files (run with the measuring MPI, EDUHPX_MPI_LOG_DIR set)" % run_dir)
+    nodes, n = set(), 0
+    with open(os.path.join(run_dir, "edumpi_rows.csv"), "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["function", "processorname", "processrank", "partnerrank", "end_us", "dur_us", "senddatasize", "recvdatasize"])
+        for path in paths:
+            rank, node, recs = read_bin(path)
+            nodes.add(node)
+            for func, start, endt, done, sb, rb, partner, flags in recs:
+                if func == "MPI_Isend" and endt:
+                    w.writerow(["MPI_Isend", node, rank, partner, int(endt / 1000), (endt - start) / 1000.0, sb, 0])
+                    if flags & HAS_DONE and done:       # the send was still in flight: its request completed at done
+                        w.writerow(["MPI_Isend_done", node, rank, partner, int(done / 1000), (done - start) / 1000.0, 0, 0])
+                elif func == "MPI_Irecv" and flags & HAS_DONE and done and partner >= 0:
+                    # end = arrival of the message, duration = time since the receive was posted
+                    w.writerow(["MPI_Irecv", node, rank, partner, int(done / 1000), (done - start) / 1000.0, 0, rb])
+                    n += 1
+    return len(paths), len(nodes), n
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("run_dir")
+    ap.add_argument("-o", "--output", help="run file (default: RUN_DIR/run.csv)")
+    ap.add_argument("--run", default="", help="name shown in the viewer (default: the name of RUN_DIR)")
+    ap.add_argument("--program", default="")
+    ap.add_argument("--header-bytes", type=int, default=66)
+    a = ap.parse_args()
+    run_dir = os.path.abspath(a.run_dir)
+    out = a.output or os.path.join(run_dir, "run.csv")
+    name = a.run or os.path.basename(run_dir)
+    ranks, nodes, nrecv = write_rows(run_dir)
+    print("eduhpx-merge: %d MPI logs from %d node(s), %d completed receives" % (ranks, nodes, nrecv))
+    tmp = os.path.join(run_dir, "merged.json")
+    sys.argv = ["eduhpx-merge", run_dir, "--run-id", "0", "--header-bytes", str(a.header_bytes), "-o", tmp]
+    core.main()
+    d = json.load(open(tmp))
+    cols = ["msg", "src", "dst", "size", "group_kind", "group", "action", "chunk", "hpx_create", "mpi_send_start", "mpi_send_end",
+            "mpi_send_done", "mpi_recv_start", "mpi_recv_end", "hpx_send_event", "hpx_recv", "hpx_done"]
+
+    def us(v):
+        return "-1" if v is None else ("%.3f" % v).rstrip("0").rstrip(".")
+
+    def row(m):
+        end, isend, rend, irecv = m.get("mpi_send_end_us"), m.get("mpi_isend_us"), m.get("mpi_recv_end_us"), m.get("mpi_irecv_us")
+        return [m.get("id", ""), m["src"], m["dst"], m["size"], m.get("group_kind", "burst"), m.get("group", 1), m.get("action", ""),
+                m.get("mpi_chunk_bytes", 0) or 0, us(m.get("hpx_create_us")),
+                us(end - isend if end is not None and isend is not None else None), us(end), us(m.get("mpi_send_done_us")),
+                us(rend - irecv if rend is not None and irecv is not None and irecv > 0 else None), us(rend),
+                us(m.get("tracy_send_us")), us(m.get("tracy_recv_us")), us(m.get("hpx_done_us"))]
+
+    with open(out, "w", newline="") as f:
+        f.write("# eduhpx_run_csv 1\n")
+        meta = ["run=%s" % name, "localities=%d" % len(d.get("localities", [])), "nodes=%d" % nodes,
+                "grouping=%s" % d.get("grouping", "").replace(" ", "_")]
+        if a.program:
+            meta.append("program=%s" % a.program)
+        f.write("# " + " ".join(meta) + "\n")
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(cols)
+        for m in d["messages"]:
+            w.writerow(row(m))
+    print("eduhpx-merge: %s: %d messages" % (out, len(d["messages"])))
+
+
+if __name__ == "__main__":
+    main()
