@@ -1,0 +1,1346 @@
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+import QtQuick.Dialogs
+
+// EduHPX: one HPX run (parcel events of HPX + MPI messages, a run file made by eduhpx-merge), shown group by
+// group (one broadcast, one barrier, one burst of other traffic, ...) in three views.
+//   By locality: one lane per locality. In its lane a locality shows what it does:
+//       dark orange  HPX prepares the send     (parcel created -> start of the MPI_Isend call)
+//       blue         MPI send                  (the MPI_Isend call; light blue: HPX sees the send request still open)
+//       blue         MPI receive               (until the receive is complete)
+//       orange       HPX picks it up           (MPI has the message, HPX has not yet)
+//       yellow       the action runs
+//     A blue arrow connects the MPI send of the sender with the MPI receive on the receiver.
+//   By message: one row per message with the same colours.
+// The strip on top has one bar per group (height ~ sqrt(duration)); click a bar or use the arrows.
+ApplicationWindow {
+    id: hpxWindow
+    visible: true
+    width: 1280
+    height: 860
+    title: run.loaded ? "EduHPX - " + run.name : "EduHPX"
+    color: "#4d4d4d"
+    minimumWidth: 900
+    minimumHeight: 660
+
+    // File menu: open a run file, the examples that are built into the program
+    menuBar: MenuBar {
+        Menu {
+            title: "File"
+            MenuItem { text: "Open run file..."; onTriggered: fileDialog.open() }
+            Menu {
+                title: "Examples"
+                MenuItem { text: "Flat broadcast, 16 localities on 4 nodes"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/flat_broadcast_16loc_4nodes.csv") }
+                MenuItem { text: "Tree broadcast, 16 localities on 4 nodes"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/hierarchical_broadcast_16loc_4nodes.csv") }
+                MenuItem { text: "Mixed traffic, 4 localities"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/mixed_4loc_1node.csv") }
+            }
+            MenuSeparator { }
+            MenuItem { text: "Quit"; onTriggered: Qt.quit() }
+        }
+        Menu {
+            title: "Help"
+            MenuItem { text: "About EduHPX"; onTriggered: aboutDialog.open() }
+        }
+    }
+
+    readonly property color preColor: "#f57c00"
+    readonly property color waitColor: "#8d8d8d"           // waiting for the data of the parent (a dependency, not work)
+    readonly property color mpiColor: "#4fc3f7"
+    readonly property color mpiSendColor: "#00ff00"        // MPI send: the green of the 3D view for 100 % sending, RGB(0, 255, 0)
+    readonly property color mpiRecvColor: "#ff0000"        // MPI receive: the red of the 3D view for 100 % receiving, RGB(255, 0, 0)
+    readonly property color recvColor: "#ffb74d"
+    readonly property color actionColor: "#ffe082"
+
+    property var groups: []         // { kind, k, total, rows, start, end }
+    property int current: 0
+    property var rows: []           // rows of the current group
+    property double viewStart: 0
+    property double viewEnd: 1
+    property real sumWait: 0        // waiting for the data of the parent (tree broadcast)
+    property real sumPre: 0         // HPX prepares the send
+    property real sumMpi: 0         // MPI send / receive
+    property real sumPick: 0        // HPX picks the message up
+    property real sumAction: 0      // the action runs
+    property real sumHpx: 0
+    property real sumBytes: 0
+    property real runBytes: 0
+    property int senders: 0         // localities that send at least one message in this group
+    property int localitiesInGroup: 0
+    property int maxFanOut: 0       // largest number of different receivers of one sender
+    property int fanOutLoc: -1
+    property int runParcels: 0
+    property int skipped: 0         // parcels without MPI data (not shown)
+    property int hoverIndex: -1
+    property string viewMode: "locality"   // locality | message
+    property var laneInfo: []
+    property var laneMsgs: []
+    property int laneHover: -1
+    property string arrowFilter: "all"   // all | data | requests: which arrows the lane view draws
+    property bool hasDataClass: false    // the group has large (data) and small (request) messages
+    // broadcast model: who asked whom (tree) and the critical path
+    property bool hasTree: false
+    property var treeNodes: []           // { loc, depth, x }
+    property var treeNodeMap: ({})
+    property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
+    property int treeLeaves: 1
+    property int treeDepth: 0
+    property double treeStart: 0
+    property int treeHover: -1
+    property bool criticalOn: false      // highlight the critical path in all views
+    property var pathSegs: []            // { kind: prepare | mpi | pick | action, a, b }
+    property real pathLength: 0
+    property real pathStart: 0           // start and end of the path, after the first event of the group
+    property real pathEnd: 0
+    property real pathPrepare: 0
+    property real pathMpi: 0
+    property real pathPick: 0
+    property real pathAction: 0
+    property string pathChain: ""
+
+    // "the send request is still open": dark green with diagonal stripes in the green of the send, so that it cannot be
+    // mistaken for a finished send
+    function openRequest(ctx, x, y, w, h) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, w, h);
+        ctx.clip();
+        ctx.fillStyle = "#0b3a0b";
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = mpiSendColor;
+        ctx.lineWidth = 1.4;
+        for (let k = -h; k < w; k += 5) {
+            ctx.beginPath();
+            ctx.moveTo(x + k, y + h);
+            ctx.lineTo(x + k + h, y);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    // blue frame around an MPI bar (send and receive together are MPI)
+    function mpiFrame(ctx, x, y, w, h) {
+        ctx.strokeStyle = mpiColor;
+        ctx.lineWidth = 1.6;
+        ctx.strokeRect(x + 0.8, y + 0.8, Math.max(w - 1.6, 0.5), Math.max(h - 1.6, 0.5));
+    }
+
+    // end of the waiting for the data of the parent (= start of the real preparation of the send)
+    function waitEnd(r) {
+        if (r.tc < 0)
+            return r.t0s;
+        return r.tw > r.tc ? Math.min(r.tw, r.t0s) : r.tc;
+    }
+
+    // should the arrow of this message be drawn? "data" = the large messages, "requests" = the small ones
+    function arrowShown(r) {
+        if (arrowFilter === "all" || !hasDataClass)
+            return true;
+        return arrowFilter === "data" ? r.big : !r.big;
+    }
+
+    function fmtUs(v) {
+        if (v === undefined || v === null)
+            return "-";
+        return v >= 1000 ? (v / 1000).toFixed(2) + " ms" : v.toFixed(0) + " us";
+    }
+    function fmtSize(b) {
+        return b >= 1048576 ? (b / 1048576).toFixed(1) + " MiB" : b >= 1024 ? (b / 1024).toFixed(b >= 10240 ? 0 : 1) + " KiB" : b + " B";
+    }
+    function actionTag(name) {
+        if (!name)
+            return "";
+        const base = name.split("<")[0].split("::").pop();
+        if (base.indexOf("base_lco_with_value") === 0 || base.indexOf("set_value") === 0)
+            return "reply";
+        const m = base.match(/communication_(\w+?)_(direct_)?action/);
+        return m ? m[1] : base.slice(0, 16);
+    }
+    function kindLabel(kind) {
+        const t = String(kind).replace(/_/g, "-");
+        return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    // share of the time of all messages of this group, as text
+    function pct(v) {
+        const total = sumWait + sumPre + sumMpi + sumPick + sumAction;
+        return total > 0 ? (100 * v / total).toFixed(0) + " %" : "-";
+    }
+    function groupLabel(g) {
+        return g ? kindLabel(g.kind) + " " + g.k + " of " + g.total : "";
+    }
+
+    // open a run file (a URL; also called from the command line and by drag and drop)
+    function openFile(url) {
+        run.load(url);
+    }
+    // for the headless preview (eduhpx --render): show a group / a view
+    function showGroup(kind, k) {
+        for (let i = 0; i < groups.length; ++i)
+            if (groups[i].kind === kind && groups[i].k === k) {
+                select(i);
+                return;
+            }
+        select(0);
+    }
+    function showView(mode) {
+        viewMode = mode;
+        lanes.requestPaint();
+        waterfall.requestPaint();
+        tree.requestPaint();
+    }
+
+    function build() {
+        const byKey = {};
+        let skippedCount = 0;
+        for (let i = 0; i < run.messages.length; ++i) {
+            const m = run.messages[i];
+            if (m.mpi_send_end_us === undefined || m.mpi_recv_end_us === undefined) {
+                ++skippedCount;
+                continue;
+            }
+            const t0 = m.mpi_send_end_us, t1 = m.mpi_recv_end_us;
+            const ds = m.mpi_isend_us !== undefined ? Math.max(m.mpi_isend_us, 0) : 0;
+            const t0s = t0 - ds;
+            const chunk = m.mpi_chunk_bytes !== undefined;
+            // HPX receive event: normally after the MPI receive; for zero-copy parcels HPX logs it when the small
+            // header is decoded, the data (the MPI message) arrives later
+            const trRaw = m.tracy_recv_us !== undefined ? m.tracy_recv_us : t1;
+            const tr = chunk ? trRaw : Math.max(trRaw, t1);
+            const tc = m.hpx_create_us !== undefined ? Math.min(m.hpx_create_us, t0s) : -1;
+            const td = m.hpx_done_us !== undefined && !chunk ? Math.max(m.hpx_done_us, tr) : -1;
+            const ts = m.tracy_send_us !== undefined ? m.tracy_send_us : -1;
+            // when the send request completed: EduMPI (EDUMPI_SEND_COMPLETION), otherwise the moment HPX noticed it
+            const tdone = m.mpi_send_done_us !== undefined ? m.mpi_send_done_us : -1;
+            const rq = tdone >= 0 ? tdone : (ts > t0 ? ts : -1);
+            // start of the MPI receive bar: when EduMPI knows the post time of the receive (time_diff of MPI_Irecv),
+            // otherwise the start of the send call (the receive cannot complete earlier)
+            const rd = m.mpi_irecv_us !== undefined ? m.mpi_irecv_us : 0;
+            const rs = Math.min(rd > 0 ? Math.max(t1 - rd, t0s) : t0s, t1);
+            const row = {src: m.src, dst: m.dst, size: m.size, tc: tc, t0s: t0s, t0: t0, t1: t1, tr: tr, td: td, ts: ts, rq: rq, rs: rs,
+                         action: m.action || "", chunk: chunk, exact: tdone >= 0, tw: -1};
+            const kind = m.group_kind !== undefined ? m.group_kind : "burst";
+            const idx = m.group !== undefined ? m.group : 1;
+            row.kind = kind;
+            row.idx = idx;
+            const key = kind + "#" + idx;
+            (byKey[key] = byKey[key] || []).push(row);
+        }
+        const list = [];
+        const total = {};
+        for (const key of Object.keys(byKey)) {
+            const rws = byKey[key];
+            let start = Infinity, end = 0;
+            for (const r of rws) {
+                start = Math.min(start, r.tc >= 0 ? r.tc : r.t0s, r.rs);
+                end = Math.max(end, r.t0, r.t1, r.tr, r.td, r.ts, r.rq);
+            }
+            // Tree broadcast: a locality that forwards the data to its children hands HPX the parcel early (with a future
+            // for data that has not arrived yet). Until its own data has arrived it is waiting, not preparing.
+            if (rws[0].kind === "broadcast") {
+                let maxS = 0, minS = Infinity;
+                for (const r of rws) {
+                    maxS = Math.max(maxS, r.size);
+                    minS = Math.min(minS, r.size);
+                }
+                if (maxS > 2 * minS) {
+                    const into = {};                                   // the data message every locality receives
+                    for (const r of rws)
+                        if (r.size >= maxS / 2)
+                            into[r.dst] = r;
+                    for (const r of rws) {
+                        const up = r.size >= maxS / 2 ? into[r.src] : undefined;
+                        if (up && r.tc >= 0 && up.t1 > r.tc)
+                            r.tw = up.t1;
+                    }
+                }
+            }
+            rws.sort((a, b) => (a.tc >= 0 ? a.tc : a.t0s) - (b.tc >= 0 ? b.tc : b.t0s));
+            list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end});
+            total[rws[0].kind] = (total[rws[0].kind] || 0) + 1;
+        }
+        list.sort((a, b) => a.start - b.start);
+        for (const g of list)
+            g.total = total[g.kind];
+        let bytes = 0, parcels = 0;
+        for (const g of list)
+            for (const r of g.rows) {
+                bytes += r.size;
+                ++parcels;
+            }
+        hpxWindow.runBytes = bytes;
+        hpxWindow.runParcels = parcels;
+        hpxWindow.skipped = skippedCount;
+        hpxWindow.groups = list;
+        select(0);
+    }
+
+    function select(i) {
+        if (groups.length === 0) {
+            rows = [];
+            laneInfo = [];
+            laneMsgs = [];
+            strip.requestPaint();
+            waterfall.requestPaint();
+            lanes.requestPaint();
+            return;
+        }
+        current = Math.max(0, Math.min(i, groups.length - 1));
+        const g = groups[current];
+        laneHover = -1;
+        hoverIndex = -1;
+        rows = g.rows;
+        const dur = Math.max(g.end - g.start, 1);
+        viewStart = g.start - dur * 0.03;
+        viewEnd = g.end + dur * 0.03;
+        let wait = 0, pre = 0, mpi = 0, pick = 0, act = 0, bytes = 0;
+        for (const r of rows) {
+            wait += r.tc >= 0 ? waitEnd(r) - r.tc : 0;
+            pre += r.tc >= 0 ? r.t0s - waitEnd(r) : 0;
+            mpi += Math.max(r.t0, r.t1, r.rq) - r.t0s;
+            pick += Math.max(r.tr - r.t1, 0);
+            act += r.td >= 0 ? r.td - r.tr : 0;
+            bytes += r.size;
+        }
+        sumWait = wait;
+        sumPre = pre;
+        sumMpi = mpi;
+        sumPick = pick;
+        sumAction = act;
+        sumHpx = pre + pick + act;
+        sumBytes = bytes;
+        // fan-out: to how many different localities does a sender send? Only the data direction counts (the large
+        // messages), not the small requests that every locality sends. Flat broadcast: one sender, all others receive.
+        let maxSize = 0, minSize = Infinity;
+        for (const r of rows) {
+            maxSize = Math.max(maxSize, r.size);
+            minSize = Math.min(minSize, r.size);
+        }
+        const dataOnly = maxSize > 2 * minSize;
+        hasDataClass = dataOnly;
+        for (const r of rows)
+            r.big = !dataOnly || r.size >= maxSize / 2;
+        const to = {};
+        const all = {};
+        for (const r of rows) {
+            all[r.src] = true;
+            all[r.dst] = true;
+            if (dataOnly && r.size < maxSize / 2)
+                continue;
+            (to[r.src] = to[r.src] || {})[r.dst] = true;
+        }
+        let best = 0, bestLoc = -1, count = 0;
+        for (const src of Object.keys(to)) {
+            ++count;
+            const n = Object.keys(to[src]).length;
+            if (n > best) { best = n; bestLoc = parseInt(src); }
+        }
+        senders = count;
+        localitiesInGroup = Object.keys(all).length;
+        maxFanOut = best;
+        fanOutLoc = bestLoc;
+        hoverIndex = -1;
+        buildLanes();
+        buildBroadcastModel();
+        if (viewMode === "tree" && !hasTree)
+            viewMode = "locality";
+        strip.requestPaint();
+        waterfall.requestPaint();
+        lanes.requestPaint();
+        tree.requestPaint();
+    }
+
+    // zoom / move the time axis (inside the limits: at least 10 us, at most a few times the group)
+    function setView(start, end) {
+        if (groups.length === 0)
+            return;
+        const g = groups[current];
+        const width = Math.max(10, Math.min(end - start, Math.max(g.end - g.start, 1) * 6));
+        viewStart = start;
+        viewEnd = start + width;
+        lanes.requestPaint();
+        waterfall.requestPaint();
+    }
+
+    // One lane per locality. Per message two pieces of work are placed: on the sender from the creation of the
+    // parcel until the end of the MPI send, on the receiver from the start of the MPI receive until the action is
+    // done. Pieces that overlap in time go on different tracks of the same lane.
+    function buildLanes() {
+        const byLoc = {};
+        const msgs = [];
+        for (let i = 0; i < rows.length; ++i) {
+            const r = rows[i];
+            const pre = {msg: i, loc: r.src, a: r.tc >= 0 ? r.tc : r.t0s, b: Math.max(r.t0, r.rq), track: 0};
+            const rcv = {msg: i, loc: r.dst, a: Math.min(r.rs, r.tr), b: Math.max(r.t1 + 1, r.td >= 0 ? r.td : r.tr), track: 0};
+            (byLoc[r.src] = byLoc[r.src] || []).push(pre);
+            (byLoc[r.dst] = byLoc[r.dst] || []).push(rcv);
+            msgs.push({row: r, pre: pre, rcv: rcv});
+        }
+        const lanesList = [];
+        for (const loc of Object.keys(byLoc).map(x => parseInt(x)).sort((a, b) => a - b)) {
+            const pieces = byLoc[loc].sort((a, b) => a.a - b.a);
+            const ends = [];
+            for (const piece of pieces) {
+                let t = 0;
+                while (t < ends.length && ends[t] > piece.a)
+                    ++t;
+                ends[t] = piece.b;
+                piece.track = t;
+            }
+            lanesList.push({loc: loc, tracks: Math.max(ends.length, 1), y0: 0, h: 0});
+        }
+        laneHover = -1;
+        hoverIndex = -1;
+        laneInfo = lanesList;
+        laneMsgs = msgs;
+    }
+
+    // Tree of a broadcast and its critical path. Needs a group with large (data) and small (request) messages:
+    // every locality sends one request to its parent and gets the data back from it.
+    function buildBroadcastModel() {
+        for (const r of rows)
+            r.crit = false;
+        hasTree = false;
+        treeEdges = [];
+        treeNodes = [];
+        treeNodeMap = ({});
+        pathSegs = [];
+        pathLength = pathPrepare = pathMpi = pathPick = pathAction = 0;
+        pathChain = "";
+        treeHover = -1;
+        const g = groups[current];
+        if (!g || g.kind !== "broadcast" || !hasDataClass)
+            return;
+        const into = {};
+        const asks = {};
+        const children = {};
+        const isReceiver = {};
+        for (const r of rows) {
+            if (r.big) {
+                into[r.dst] = r;
+                isReceiver[r.dst] = true;
+                (children[r.src] = children[r.src] || []).push(r.dst);
+            } else {
+                asks[r.src] = r;
+            }
+        }
+        let root = -1;
+        for (const r of rows)
+            if (r.big && !isReceiver[r.src]) {
+                root = r.src;
+                break;
+            }
+        if (root < 0)
+            return;
+
+        // layout of the tree: depth = level, x = position among the leaves
+        const map = {};
+        let leaf = 0, maxDepth = 0;
+        const place = (loc, depth) => {
+            maxDepth = Math.max(maxDepth, depth);
+            const kids = (children[loc] || []).slice().sort((a, b) => a - b);
+            let x;
+            if (kids.length === 0) {
+                x = leaf++;
+            } else {
+                let sum = 0;
+                for (const k of kids)
+                    sum += place(k, depth + 1);
+                x = sum / kids.length;
+            }
+            map[loc] = {loc: loc, depth: depth, x: x};
+            return x;
+        };
+        place(root, 0);
+        const edges = [];
+        for (const loc of Object.keys(map).map(x => parseInt(x)).sort((a, b) => a - b))
+            if (loc !== root && into[loc])
+                edges.push({p: into[loc].src, c: loc, data: into[loc], req: asks[loc]});
+        treeNodeMap = map;
+        treeNodes = Object.keys(map).map(k => map[k]);
+        treeEdges = edges;
+        treeLeaves = Math.max(leaf, 1);
+        treeDepth = maxDepth;
+        treeStart = g.start;
+        hasTree = true;
+
+        // critical path: from the data message that is finished last, backwards. A locality that waited for the data of
+        // its parent continues at the hop of the parent; a child of the root continues in its own request and the
+        // handling of it at the root.
+        let last = null, lastEnd = -Infinity;
+        for (const r of rows)
+            if (r.big) {
+                const e = Math.max(r.t1, r.tr, r.td);
+                if (e > lastEnd) {
+                    lastEnd = e;
+                    last = r;
+                }
+            }
+        const segs = [];
+        const hops = [];
+        const add = (kind, a, b, row) => {
+            row.crit = true;
+            if (b > a)
+                segs.push({kind: kind, a: a, b: b});
+        };
+        let cur = last, final = true;
+        while (cur) {
+            hops.push(cur);
+            if (final) {
+                add("action", cur.tr, cur.td, cur);
+                add("pick", cur.t1, cur.tr, cur);
+                final = false;
+            }
+            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
+            const we = waitEnd(cur);
+            add("prepare", we, cur.t0s, cur);
+            const up = into[cur.src];
+            if (up && cur.tw > cur.tc) {
+                cur = up;
+                continue;
+            }
+            const rq = asks[cur.dst];
+            if (rq) {
+                add("action", rq.tr, Math.max(cur.tc, rq.tr), rq);
+                add("pick", rq.t1, rq.tr, rq);
+                add("mpi", rq.t0s, Math.max(rq.t0, rq.t1, rq.rq), rq);
+                add("prepare", waitEnd(rq), rq.t0s, rq);
+            }
+            break;
+        }
+        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0;
+        for (const sg of segs) {
+            a0 = Math.min(a0, sg.a);
+            if (sg.kind === "prepare") prep += sg.b - sg.a;
+            else if (sg.kind === "mpi") mpi += sg.b - sg.a;
+            else if (sg.kind === "pick") pick += sg.b - sg.a;
+            else act += sg.b - sg.a;
+        }
+        pathSegs = segs;
+        pathLength = lastEnd - a0;
+        pathStart = a0 - g.start;
+        pathEnd = lastEnd - g.start;
+        pathPrepare = prep;
+        pathMpi = mpi;
+        pathPick = pick;
+        pathAction = act;
+        const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
+        for (let i = hops.length - 1; i >= 0; --i)
+            names.push(hops[i].dst);
+        pathChain = names.map(l => "L#" + l).join(" → ");
+    }
+
+    function treeInfoText(e) {
+        if (!e)
+            return "Hover an edge: when the child asked, what it waited for, what HPX did and how long MPI took.";
+        const d = e.data, q = e.req;
+        const we = waitEnd(d);
+        return "L#" + e.p + " → L#" + e.c + ":  "
+            + (q ? "asked at +" + fmtUs(q.tc - treeStart) + " (request arrived after " + fmtUs(q.tr - q.tc) + "),  " : "")
+            + (d.tc >= 0 && we > d.tc ? "waited " + fmtUs(we - d.tc) + " for the data of its parent,  " : "")
+            + "HPX prepared " + fmtUs(d.t0s - we) + ",  MPI " + fmtUs(Math.max(d.t0, d.t1, d.rq) - d.t0s)
+            + ";  data arrived at +" + fmtUs(d.t1 - treeStart);
+    }
+
+    function infoText(r) {
+        if (!r)
+            return "Move the mouse over a piece of work or an arrow. Wheel zooms, drag moves.";
+        return "L#" + r.src + " to L#" + r.dst + ", " + fmtSize(r.size) + ":  "
+            + (r.tc >= 0 ? (waitEnd(r) > r.tc ? "waited " + fmtUs(waitEnd(r) - r.tc) + " for the data of its parent,  " : "")
+                           + "HPX prepares " + fmtUs(r.t0s - waitEnd(r)) + ",  " : "")
+            + "MPI send call " + fmtUs(r.t0 - r.t0s)
+            + (r.rq > r.t0 ? ", send request completed after " + fmtUs(r.rq - r.t0s) + (r.exact ? "" : " (as HPX saw it)") : "")
+            + ",  MPI receive complete " + fmtUs(r.t1 - r.t0s) + " after the send started"
+            + (r.chunk ? "  (data of a large parcel)" : ",  HPX picks it up " + fmtUs(r.tr - r.t1))
+            + (r.td >= 0 ? ",  action " + fmtUs(r.td - r.tr) : "")
+            + (r.action ? "   [" + r.action.split("<")[0] + "]" : "");
+    }
+
+    RunFile {
+        id: run
+        onChanged: {
+            if (loaded)
+                hpxWindow.build();
+            else {
+                hpxWindow.groups = [];
+                hpxWindow.select(0);
+            }
+        }
+    }
+
+    FileDialog {
+        id: fileDialog
+        title: "Open a run file"
+        nameFilters: ["EduHPX run file (*.csv)", "All files (*)"]
+        onAccepted: run.load(selectedFile)
+    }
+
+    Dialog {
+        id: aboutDialog
+        title: "About EduHPX"
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(560, hpxWindow.width - 40)
+        standardButtons: Dialog.Close
+        contentItem: Label {
+            wrapMode: Text.WordWrap
+            textFormat: Text.StyledText
+            text: "<b>EduHPX</b> 0.1.0<br>HPX parcels and MPI messages on one timeline.<br><br>"
+                + "Reads a run file (CSV, format 1) made by <i>eduhpx-merge</i>. Times are microseconds on the clock of the first node, -1 = unknown. "
+                + "Green: MPI send, red: MPI receive, blue frame: MPI, striped: the send request is still open, grey: waiting for data.<br><br>"
+                + "BSD-3-Clause. Uses Qt 6 (LGPL, dynamically linked)."
+        }
+    }
+
+    // drop a run file on the window
+    DropArea {
+        anchors.fill: parent
+        keys: ["text/uri-list"]
+        onDropped: (drop) => { if (drop.hasUrls) hpxWindow.openFile(drop.urls[0]); }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 10
+        spacing: 8
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Button {
+                text: "Open run..."
+                onClicked: fileDialog.open()
+            }
+            Label {
+                Layout.fillWidth: true
+                color: run.error !== "" ? "#ff8a80" : "white"
+                elide: Text.ElideRight
+                text: run.error !== "" ? run.error
+                    : run.loaded ? "Run " + run.name + " - " + hpxWindow.groups.length + " groups, " + run.messages.length + " parcels"
+                                   + (hpxWindow.skipped > 0 ? " (" + hpxWindow.skipped + " without MPI data are not shown)" : "")
+                    : ""
+            }
+        }
+
+        // choose the group
+        RowLayout {
+            Layout.fillWidth: true
+            visible: run.loaded && hpxWindow.groups.length > 0
+            spacing: 10
+            Button { text: "<"; enabled: hpxWindow.current > 0; onClicked: hpxWindow.select(hpxWindow.current - 1) }
+            Label {
+                color: "white"
+                font.bold: true
+                text: hpxWindow.groups.length > 0 ? hpxWindow.groupLabel(hpxWindow.groups[hpxWindow.current]) : ""
+            }
+            Button { text: ">"; enabled: hpxWindow.current < hpxWindow.groups.length - 1; onClicked: hpxWindow.select(hpxWindow.current + 1) }
+            Label {
+                color: "white"
+                text: hpxWindow.groups.length > 0
+                    ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groups[hpxWindow.current].end - hpxWindow.groups[hpxWindow.current].start) + " in total"
+                    : ""
+            }
+            Item { Layout.fillWidth: true }
+        }
+
+        // what is in this group: how many messages, how much data, where the time goes
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 126
+            visible: run.loaded && hpxWindow.groups.length > 0
+            color: "#3a3a3a"
+            border.color: "#2b2b2b"
+            radius: 3
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 22
+                    Label { color: "white"; font.bold: true; text: hpxWindow.rows.length + " messages" }
+                    Label { color: "white"; font.bold: true; text: hpxWindow.fmtSize(hpxWindow.sumBytes) + " data" }
+                    Label { color: "white"; Layout.fillWidth: true; elide: Text.ElideRight
+                            text: hpxWindow.senders + " of " + hpxWindow.localitiesInGroup + " localities send data, largest fan-out "
+                                  + hpxWindow.maxFanOut + " (L#" + hpxWindow.fanOutLoc + ")" }
+                    Label { color: "#999999"; text: "whole run: " + hpxWindow.runParcels + " messages, " + hpxWindow.fmtSize(hpxWindow.runBytes) }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 22
+                    Label { color: "#999999"; text: "sum over messages:" }
+                    Label { color: hpxWindow.mpiColor; font.bold: true
+                            text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) + "  (" + hpxWindow.pct(hpxWindow.sumMpi) + ")" }
+                    Label { color: hpxWindow.recvColor; font.bold: true
+                            text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) + "  (" + hpxWindow.pct(hpxWindow.sumHpx) + ")" }
+                    Label { color: hpxWindow.waitColor; font.bold: true; visible: hpxWindow.sumWait > 0
+                            text: "waiting for data " + hpxWindow.fmtUs(hpxWindow.sumWait) + "  (" + hpxWindow.pct(hpxWindow.sumWait) + ")" }
+                    Label { color: "#bbbbbb"; Layout.fillWidth: true; elide: Text.ElideRight
+                            text: hpxWindow.rows.length > 0 ? "per message: MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi / hpxWindow.rows.length)
+                                                              + ", HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx / hpxWindow.rows.length) : "" }
+                }
+                // the critical path of a broadcast: the chain that sets its length
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 18
+                    visible: hpxWindow.hasTree && hpxWindow.pathLength > 0
+                    Label { color: "#ffd600"; font.bold: true
+                            text: "critical path " + hpxWindow.fmtUs(hpxWindow.pathLength) + " (from +" + hpxWindow.fmtUs(hpxWindow.pathStart) + " to +" + hpxWindow.fmtUs(hpxWindow.pathEnd) + ")" }
+                    Label { color: hpxWindow.preColor; text: "HPX prepares " + hpxWindow.fmtUs(hpxWindow.pathPrepare) }
+                    Label { color: hpxWindow.mpiColor; text: "MPI " + hpxWindow.fmtUs(hpxWindow.pathMpi) }
+                    Label { color: hpxWindow.recvColor; text: "HPX picks up " + hpxWindow.fmtUs(hpxWindow.pathPick) }
+                    Label { color: hpxWindow.actionColor; text: "action " + hpxWindow.fmtUs(hpxWindow.pathAction) }
+                    Label { color: "#bbbbbb"; Layout.fillWidth: true; elide: Text.ElideRight; text: hpxWindow.pathChain }
+                }
+                // the same time as one bar: HPX prepares | MPI | HPX picks it up | action
+                Item {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumAction, 1e-9)
+                    Repeater {
+                        model: [
+                            {name: "waits for data", v: hpxWindow.sumWait, c: hpxWindow.waitColor},
+                            {name: "HPX prepares", v: hpxWindow.sumPre, c: hpxWindow.preColor},
+                            {name: "MPI", v: hpxWindow.sumMpi, c: hpxWindow.mpiColor},
+                            {name: "HPX picks up", v: hpxWindow.sumPick, c: hpxWindow.recvColor},
+                            {name: "action", v: hpxWindow.sumAction, c: hpxWindow.actionColor}
+                        ]
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            property real before: {
+                                let b = 0;
+                                const parts = [hpxWindow.sumWait, hpxWindow.sumPre, hpxWindow.sumMpi, hpxWindow.sumPick, hpxWindow.sumAction];
+                                for (let i = 0; i < index; ++i)
+                                    b += parts[i];
+                                return b;
+                            }
+                            x: parent.width * before / parent.total
+                            width: Math.max(parent.width * modelData.v / parent.total, 0)
+                            height: parent.height
+                            color: modelData.c
+                            Label {
+                                anchors.centerIn: parent
+                                color: "black"
+                                font.pixelSize: 11
+                                visible: parent.width > 90
+                                text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + hpxWindow.pct(modelData.v) + ")"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // all groups: one bar each; blue-grey = collective, grey = other traffic
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 60
+            visible: run.loaded && hpxWindow.groups.length > 0
+            color: "#2b2b2b"
+            border.color: "#222222"
+
+            Canvas {
+                id: strip
+                anchors.fill: parent
+                readonly property int pad: 8
+                function barWidth() { return (width - 2 * pad) / Math.max(hpxWindow.groups.length, 1); }
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    const n = hpxWindow.groups.length;
+                    if (n === 0)
+                        return;
+                    let longest = 1;
+                    for (const g of hpxWindow.groups)
+                        longest = Math.max(longest, g.end - g.start);
+                    const bw = barWidth();
+                    for (let i = 0; i < n; ++i) {
+                        const g = hpxWindow.groups[i];
+                        const h = Math.max(3, Math.sqrt((g.end - g.start) / longest) * (height - 14));
+                        ctx.fillStyle = i === hpxWindow.current ? "#ffffff" : (g.kind === "burst" ? "#6b6b6b" : "#6fa8dc");
+                        ctx.fillRect(pad + i * bw + 1, height - 6 - h, Math.max(bw - 2, 1), h);
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    function pick(x) { hpxWindow.select(Math.floor((x - strip.pad) / strip.barWidth())); }
+                    onPressed: (e) => pick(e.x)
+                    onPositionChanged: (e) => { if (pressed) pick(e.x); }
+                }
+            }
+        }
+
+        // choose the view
+        RowLayout {
+            Layout.fillWidth: true
+            visible: run.loaded && hpxWindow.groups.length > 0
+            spacing: 4
+            Button { text: "By locality"; checkable: true; checked: hpxWindow.viewMode === "locality"; onClicked: { hpxWindow.viewMode = "locality"; lanes.requestPaint(); } }
+            Button { text: "By message"; checkable: true; checked: hpxWindow.viewMode === "message"; onClicked: { hpxWindow.viewMode = "message"; waterfall.requestPaint(); } }
+            Button { text: "Tree"; visible: hpxWindow.hasTree; checkable: true; checked: hpxWindow.viewMode === "tree"; onClicked: { hpxWindow.viewMode = "tree"; tree.requestPaint(); } }
+            Button { text: "Reset zoom"; onClicked: hpxWindow.select(hpxWindow.current) }
+            Button {
+                text: "Critical path"
+                visible: hpxWindow.hasTree
+                checkable: true
+                checked: hpxWindow.criticalOn
+                onToggled: { hpxWindow.criticalOn = checked; lanes.requestPaint(); waterfall.requestPaint(); tree.requestPaint(); }
+            }
+            Item { Layout.preferredWidth: 18 }
+            Label { color: "#cccccc"; text: "Arrows:"; visible: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass }
+            Repeater {
+                model: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass ? [["all", "All"], ["data", "Data"], ["requests", "Requests"]] : []
+                delegate: Button {
+                    required property var modelData
+                    text: modelData[1]
+                    checkable: true
+                    checked: hpxWindow.arrowFilter === modelData[0]
+                    onClicked: { hpxWindow.arrowFilter = modelData[0]; lanes.requestPaint(); }
+                }
+            }
+            Item { Layout.fillWidth: true }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            color: "#2b2b2b"
+            border.color: "#222222"
+            clip: true
+
+            // ---------------------------------------------------------------- view 1: one lane per locality
+            Canvas {
+                id: lanes
+                anchors.fill: parent
+                visible: hpxWindow.viewMode === "locality"
+                readonly property int leftMargin: 80
+                readonly property int topMargin: 24
+                readonly property int rightMargin: 14
+                readonly property int lanePad: 8
+                property real trackH: 12
+
+                function xOf(t) {
+                    return leftMargin + (t - hpxWindow.viewStart) / (hpxWindow.viewEnd - hpxWindow.viewStart) * (width - leftMargin - rightMargin);
+                }
+                function tOf(x) {
+                    return hpxWindow.viewStart + (x - leftMargin) / (width - leftMargin - rightMargin) * (hpxWindow.viewEnd - hpxWindow.viewStart);
+                }
+                function layout() {
+                    const ls = hpxWindow.laneInfo;
+                    let sum = 0;
+                    for (const l of ls)
+                        sum += l.tracks;
+                    const avail = height - topMargin - 6 - ls.length * lanePad;
+                    trackH = Math.max(3, Math.min(20, avail / Math.max(sum, 1)));
+                    let y = topMargin;
+                    for (const l of ls) {
+                        l.y0 = y;
+                        l.h = l.tracks * trackH + lanePad;
+                        y += l.h;
+                    }
+                }
+                function laneOf(loc) {
+                    for (const l of hpxWindow.laneInfo)
+                        if (l.loc === loc)
+                            return l;
+                    return null;
+                }
+                function yOf(piece) {
+                    const l = laneOf(piece.loc);
+                    return l ? l.y0 + lanePad / 2 + piece.track * trackH + trackH / 2 : 0;
+                }
+                // the arrow starts at the end of the MPI send call, but never after the end of the receive
+                // (big messages arrive while the sender is still in the call)
+                function arrowStart(r) {
+                    return Math.max(r.t0s, Math.min(r.t0, r.t1));
+                }
+                function arrow(ctx, x0, y0, x1, y1, w, color, outline) {
+                    const ang = Math.atan2(y1 - y0, x1 - x0), h = 7 + w * 2.4;
+                    const bx = x1 - h * 0.8 * Math.cos(ang), by = y1 - h * 0.8 * Math.sin(ang);   // the shaft ends inside the head
+                    const head = () => {
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(x1 - h * Math.cos(ang - 0.42), y1 - h * Math.sin(ang - 0.42));
+                        ctx.lineTo(x1 - h * Math.cos(ang + 0.42), y1 - h * Math.sin(ang + 0.42));
+                        ctx.closePath();
+                    };
+                    if (outline) {                       // dark halo under the line and the head
+                        ctx.strokeStyle = "rgba(0,0,0,0.75)"; ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.lineWidth = w + 2.6;
+                        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, by); ctx.stroke();
+                        head(); ctx.lineWidth = 2.6; ctx.fill(); ctx.stroke();
+                    }
+                    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w;
+                    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, by); ctx.stroke();
+                    head(); ctx.fill();
+                }
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    if (!run.loaded || hpxWindow.laneInfo.length === 0)
+                        return;
+                    layout();
+                    const msgs = hpxWindow.laneMsgs;
+                    const bh = trackH * 0.7;
+                    const hot = hpxWindow.laneHover;
+
+                    ctx.font = "12px sans-serif";
+                    ctx.textAlign = "left";
+                    hpxWindow.laneInfo.forEach((l, i) => {
+                        ctx.fillStyle = i % 2 ? "#303030" : "#262626";
+                        ctx.fillRect(0, l.y0, width, l.h);
+                        ctx.fillStyle = "#dddddd";
+                        ctx.fillText("L#" + l.loc, 10, l.y0 + Math.min(l.h, 30) / 2 + 4);
+                    });
+
+                    // time axis, 0 = start of this group
+                    const origin = hpxWindow.groups.length > 0 ? hpxWindow.groups[hpxWindow.current].start : 0;
+                    const span = hpxWindow.viewEnd - hpxWindow.viewStart;
+                    const raw = span / 8;
+                    const pow10 = Math.pow(10, Math.floor(Math.log(Math.max(raw, 0.001)) / Math.LN10));
+                    const step = [1, 2, 5, 10].map(f => f * pow10).find(s => s >= raw);
+                    ctx.font = "11px sans-serif";
+                    ctx.fillStyle = "#999999";
+                    ctx.strokeStyle = "#3a3a3a";
+                    ctx.lineWidth = 1;
+                    let ticks = 0;
+                    for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step; t + origin <= hpxWindow.viewEnd && ticks < 40; t += step, ++ticks) {
+                        const x = Math.round(xOf(t + origin)) + 0.5;
+                        ctx.beginPath(); ctx.moveTo(x, topMargin - 4); ctx.lineTo(x, height); ctx.stroke();
+                        ctx.fillText(hpxWindow.fmtUs(t), x + 3, 13);
+                    }
+
+                    // what each locality does: the send on the sender, the receive on the receiver
+                    for (let i = 0; i < msgs.length; ++i) {
+                        const m = msgs[i], r = m.row;
+                        const yp = yOf(m.pre) - bh / 2, yr = yOf(m.rcv) - bh / 2;
+                        if (r.tc >= 0) {                                       // sender: waits for the data of its parent, then HPX prepares the send
+                            const we = hpxWindow.waitEnd(r);
+                            if (we > r.tc) {
+                                ctx.fillStyle = hpxWindow.waitColor;
+                                ctx.fillRect(xOf(r.tc), yp, Math.max(xOf(we) - xOf(r.tc), 1.5), bh);
+                            }
+                            ctx.fillStyle = hpxWindow.preColor;
+                            ctx.fillRect(xOf(we), yp, Math.max(xOf(r.t0s) - xOf(we), 1.5), bh);
+                        }
+                        const xs0 = xOf(r.t0s), xs1 = xOf(Math.max(r.t0, r.rq));
+                        ctx.fillStyle = hpxWindow.mpiSendColor;                // sender: MPI send, the call itself (green)
+                        ctx.fillRect(xs0, yp, Math.max(xOf(r.t0) - xs0, 2), bh);
+                        if (r.rq > r.t0)                                       // sender: the send request is still open (striped)
+                            hpxWindow.openRequest(ctx, xOf(r.t0), yp, Math.max(xOf(r.rq) - xOf(r.t0), 1.5), bh);
+                        hpxWindow.mpiFrame(ctx, xs0, yp, Math.max(xs1 - xs0, 4), bh);
+                        const xr0 = xOf(r.rs), xr1 = xOf(r.t1);
+                        ctx.fillStyle = hpxWindow.mpiRecvColor;                // receiver: MPI receive until it is complete (red)
+                        ctx.fillRect(xr0, yr, Math.max(xr1 - xr0, 2), bh);
+                        hpxWindow.mpiFrame(ctx, xr0, yr, Math.max(xr1 - xr0, 4), bh);
+                        if (r.tr > r.t1) {                                     // receiver: HPX picks it up
+                            ctx.fillStyle = hpxWindow.recvColor;
+                            ctx.fillRect(xOf(r.t1), yr, Math.max(xOf(r.tr) - xOf(r.t1), 1.5), bh);
+                        }
+                        if (r.td > r.tr) {                                     // receiver: the action runs
+                            ctx.fillStyle = hpxWindow.actionColor;
+                            ctx.fillRect(xOf(r.tr), yr, Math.max(xOf(r.td) - xOf(r.tr), 1.5), bh);
+                        }
+                        if (r.chunk && r.tr < r.t1) {                          // large parcel: HPX saw the header earlier
+                            ctx.fillStyle = hpxWindow.recvColor;
+                            ctx.beginPath();
+                            ctx.moveTo(xOf(r.tr), yr); ctx.lineTo(xOf(r.tr) + 3, yr + bh / 2);
+                            ctx.lineTo(xOf(r.tr), yr + bh); ctx.lineTo(xOf(r.tr) - 3, yr + bh / 2);
+                            ctx.closePath(); ctx.fill();
+                        }
+                    }
+                    // arrows on top of the bars: thin, with a dark outline so that they can be followed over any colour;
+                    // the one under the mouse is highlighted
+                    const dense = msgs.length > 30;
+                    const crit = hpxWindow.criticalOn && hpxWindow.hasTree;
+                    for (let i = 0; i < msgs.length; ++i) {
+                        if (i === hot || !hpxWindow.arrowShown(msgs[i].row))
+                            continue;
+                        const m = msgs[i], r = m.row;
+                        if (crit && r.crit)
+                            continue;                                          // the critical path is drawn last, on top
+                        arrow(ctx, xOf(arrowStart(r)), yOf(m.pre), xOf(r.t1), yOf(m.rcv), dense ? 0.9 : 1.3,
+                              crit ? "rgba(240,240,240,0.28)" : (dense ? "rgba(240,240,240,0.55)" : "rgba(255,255,255,0.95)"), true);
+                    }
+                    if (crit) {
+                        for (let i = 0; i < msgs.length; ++i) {
+                            const m = msgs[i], r = m.row;
+                            if (!r.crit || i === hot)
+                                continue;
+                            arrow(ctx, xOf(arrowStart(r)), yOf(m.pre), xOf(r.t1), yOf(m.rcv), 3, "#ffd600", true);
+                            ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 2;
+                            ctx.strokeRect(xOf(m.pre.a), yOf(m.pre) - bh / 2, Math.max(xOf(m.pre.b) - xOf(m.pre.a), 2), bh);
+                            ctx.strokeRect(xOf(m.rcv.a), yOf(m.rcv) - bh / 2, Math.max(xOf(m.rcv.b) - xOf(m.rcv.a), 3), bh);
+                        }
+                    }
+                    if (hot >= 0 && hot < msgs.length) {
+                        const m = msgs[hot], r = m.row;
+                        arrow(ctx, xOf(arrowStart(r)), yOf(m.pre), xOf(r.t1), yOf(m.rcv), 2.2, "#ff4081", true);
+                        ctx.strokeStyle = "#ff4081"; ctx.lineWidth = 1.5;
+                        ctx.strokeRect(xOf(m.pre.a), yOf(m.pre) - bh / 2, Math.max(xOf(m.pre.b) - xOf(m.pre.a), 2), bh);
+                        ctx.strokeRect(xOf(m.rcv.a), yOf(m.rcv) - bh / 2, Math.max(xOf(m.rcv.b) - xOf(m.rcv.a), 3), bh);
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    property real pressX: 0
+                    property real startAt: 0
+                    property real endAt: 0
+                    function distToSegment(px, py, x0, y0, x1, y1) {
+                        const dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+                        let u = len2 > 0 ? ((px - x0) * dx + (py - y0) * dy) / len2 : 0;
+                        u = Math.max(0, Math.min(1, u));
+                        return Math.hypot(px - (x0 + u * dx), py - (y0 + u * dy));
+                    }
+                    onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
+                    onWheel: (w) => {
+                        const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
+                        const tc = lanes.tOf(w.x);
+                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                    }
+                    onPositionChanged: (e) => {
+                        if (pressed) {
+                            const dt = (e.x - pressX) / (lanes.width - lanes.leftMargin - lanes.rightMargin) * (endAt - startAt);
+                            hpxWindow.setView(startAt - dt, startAt - dt + (endAt - startAt));
+                            return;
+                        }
+                        let best = -1, bestDist = 6;
+                        const th = lanes.trackH * 0.7 / 2 + 2;
+                        hpxWindow.laneMsgs.forEach((m, i) => {
+                            const r = m.row;
+                            let d = hpxWindow.arrowShown(r)
+                                ? distToSegment(e.x, e.y, lanes.xOf(lanes.arrowStart(r)), lanes.yOf(m.pre), lanes.xOf(r.t1), lanes.yOf(m.rcv)) : 1e9;
+                            if (Math.abs(e.y - lanes.yOf(m.pre)) <= th && e.x >= lanes.xOf(m.pre.a) - 2 && e.x <= lanes.xOf(m.pre.b) + 2)
+                                d = 0;
+                            if (Math.abs(e.y - lanes.yOf(m.rcv)) <= th && e.x >= lanes.xOf(m.rcv.a) - 3 && e.x <= lanes.xOf(m.rcv.b) + 3)
+                                d = 0;
+                            if (d < bestDist) { bestDist = d; best = i; }
+                        });
+                        if (best !== hpxWindow.laneHover) {
+                            hpxWindow.laneHover = best;
+                            lanes.requestPaint();
+                        }
+                    }
+                }
+            }
+
+            // ---------------------------------------------------------------- view 3: the tree of a broadcast
+            Canvas {
+                id: tree
+                anchors.fill: parent
+                visible: hpxWindow.viewMode === "tree"
+                readonly property int padX: 120
+                readonly property int padTop: 56
+                readonly property int padBottom: 70
+                function nx(n) { return padX + (width - 2 * padX) * (hpxWindow.treeLeaves > 1 ? n.x / (hpxWindow.treeLeaves - 1) : 0.5); }
+                function ny(n) { return padTop + (height - padTop - padBottom) * (hpxWindow.treeDepth > 0 ? n.depth / hpxWindow.treeDepth : 0); }
+                function label(ctx, text, x, y, align, color) {
+                    ctx.textAlign = align;
+                    const w = ctx.measureText(text).width;
+                    const left = align === "right" ? x - w : (align === "center" ? x - w / 2 : x);
+                    ctx.fillStyle = "rgba(43,43,43,0.88)";
+                    ctx.fillRect(left - 2, y - 10, w + 4, 14);
+                    ctx.fillStyle = color;
+                    ctx.fillText(text, x, y);
+                }
+                // arrow: the head grows with the width of the line and the shaft ends inside the head (a shaft that runs to the
+                // tip pokes out in front of the head)
+                function arrowHead(ctx, x0, y0, x1, y1, w, color) {
+                    const ang = Math.atan2(y1 - y0, x1 - x0), h = 8 + w * 2.6;
+                    const bx = x1 - h * 0.8 * Math.cos(ang), by = y1 - h * 0.8 * Math.sin(ang);
+                    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w;
+                    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, by); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(x1, y1);
+                    ctx.lineTo(x1 - h * Math.cos(ang - 0.42), y1 - h * Math.sin(ang - 0.42));
+                    ctx.lineTo(x1 - h * Math.cos(ang + 0.42), y1 - h * Math.sin(ang + 0.42));
+                    ctx.closePath(); ctx.fill();
+                }
+                // the two lines of an edge, next to each other: data from the parent to the child, request the other way
+                function edgeGeometry(e) {
+                    const pn = hpxWindow.treeNodeMap[e.p], cn = hpxWindow.treeNodeMap[e.c];
+                    const x0 = nx(pn), y0 = ny(pn), x1 = nx(cn), y1 = ny(cn);
+                    const len = Math.max(Math.hypot(x1 - x0, y1 - y0), 1);
+                    const ox = -(y1 - y0) / len * 5, oy = (x1 - x0) / len * 5;
+                    const r = 18, ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+                    return {dx0: x0 + ux * r + ox, dy0: y0 + uy * r + oy, dx1: x1 - ux * (r + 4) + ox, dy1: y1 - uy * (r + 4) + oy,
+                            qx0: x1 - ux * r - ox, qy0: y1 - uy * r - oy, qx1: x0 + ux * (r + 4) - ox, qy1: y0 + uy * (r + 4) - oy,
+                            mx: (x0 + x1) / 2, my: (y0 + y1) / 2};
+                }
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    if (!run.loaded || !hpxWindow.hasTree)
+                        return;
+                    const crit = hpxWindow.criticalOn;
+                    ctx.font = "11px sans-serif";
+                    ctx.textAlign = "center";
+                    for (let i = 0; i < hpxWindow.treeEdges.length; ++i) {
+                        const e = hpxWindow.treeEdges[i], g = edgeGeometry(e);
+                        const hot = i === hpxWindow.treeHover;
+                        const onPath = crit && e.data.crit;
+                        const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,255,255,0.3)" : "#ffffff"));
+                        const reqColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
+                        arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, 2 + Math.min(Math.sqrt(e.data.size) / 150, 2) + (onPath || hot ? 1 : 0), dataColor);
+                        if (e.req)
+                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, 1.2 + (onPath || hot ? 1 : 0), reqColor);
+                        // the time this hop took: from the arrival at the parent (or the request, at the root) to the arrival here
+                        const up = hpxWindow.treeNodeMap[e.p] ? e.data : null;
+                        let from = e.req ? e.req.tc : hpxWindow.treeStart;
+                        for (const o of hpxWindow.treeEdges)
+                            if (o.c === e.p)
+                                from = o.data.t1;
+                        // 62 % along the edge, so that the labels of many edges that start in one node do not run into each other
+                        label(ctx, "+" + hpxWindow.fmtUs(e.data.t1 - from), g.dx0 + (g.dx1 - g.dx0) * 0.62 + 14, g.dy0 + (g.dy1 - g.dy0) * 0.62 + 4,
+                              "left", "#dddddd");
+                    }
+                    for (const n of hpxWindow.treeNodes) {
+                        const x = nx(n), y = ny(n);
+                        let arrive = null;
+                        for (const e of hpxWindow.treeEdges)
+                            if (e.c === n.loc)
+                                arrive = e.data.t1 - hpxWindow.treeStart;
+                        const onPath = crit && hpxWindow.pathChain.indexOf("L#" + n.loc + " ") >= 0 || (crit && hpxWindow.pathChain.endsWith("L#" + n.loc));
+                        ctx.fillStyle = "#2f2f2f";
+                        ctx.beginPath(); ctx.arc(x, y, 17, 0, 2 * Math.PI); ctx.fill();
+                        ctx.strokeStyle = onPath ? "#ffd600" : "#cccccc"; ctx.lineWidth = onPath ? 3 : 1.5;
+                        ctx.beginPath(); ctx.arc(x, y, 17, 0, 2 * Math.PI); ctx.stroke();
+                        ctx.fillStyle = "#ffffff";
+                        ctx.font = "bold 11px sans-serif";
+                        ctx.textAlign = "center";                  // label() leaves its own alignment set
+                        ctx.fillText("L#" + n.loc, x, y + 4);
+                        ctx.font = "10px sans-serif";
+                        // to the left of the node: the edges to the parent and to the children leave it above and below
+                        label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - 24, y + 4, "right", "#bbbbbb");
+                    }
+                    ctx.textAlign = "left";
+                    ctx.fillStyle = "#999999";
+                    ctx.font = "11px sans-serif";
+                    ctx.fillText("white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the broadcast", 14, height - 14);
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onPositionChanged: (e) => {
+                        let best = -1, bestDist = 9;
+                        hpxWindow.treeEdges.forEach((ed, i) => {
+                            const g = tree.edgeGeometry(ed);
+                            const dx = g.dx1 - g.dx0, dy = g.dy1 - g.dy0, len2 = dx * dx + dy * dy;
+                            let u = len2 > 0 ? ((e.x - g.dx0) * dx + (e.y - g.dy0) * dy) / len2 : 0;
+                            u = Math.max(0, Math.min(1, u));
+                            const d = Math.hypot(e.x - (g.dx0 + u * dx), e.y - (g.dy0 + u * dy));
+                            if (d < bestDist) { bestDist = d; best = i; }
+                        });
+                        if (best !== hpxWindow.treeHover) {
+                            hpxWindow.treeHover = best;
+                            tree.requestPaint();
+                        }
+                    }
+                }
+            }
+
+            // ---------------------------------------------------------------- view 2: one row per message
+            Canvas {
+                id: waterfall
+                anchors.fill: parent
+                visible: hpxWindow.viewMode === "message"
+                readonly property int leftMargin: 190
+                readonly property int topMargin: 24
+                readonly property int rightMargin: 12
+
+                function rowHeight() {
+                    return Math.max(4, Math.min(34, (height - topMargin - 6) / Math.max(hpxWindow.rows.length, 1)));
+                }
+                function xOf(t) {
+                    return leftMargin + (t - hpxWindow.viewStart) / (hpxWindow.viewEnd - hpxWindow.viewStart) * (width - leftMargin - rightMargin);
+                }
+                function tOf(x) {
+                    return hpxWindow.viewStart + (x - leftMargin) / (width - leftMargin - rightMargin) * (hpxWindow.viewEnd - hpxWindow.viewStart);
+                }
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    if (!run.loaded)
+                        return;
+                    const rows = hpxWindow.rows;
+                    const rh = rowHeight();
+                    const origin = hpxWindow.groups.length > 0 ? hpxWindow.groups[hpxWindow.current].start : 0;
+                    const span = hpxWindow.viewEnd - hpxWindow.viewStart;
+                    const raw = span / 8;
+                    const pow10 = Math.pow(10, Math.floor(Math.log(Math.max(raw, 0.001)) / Math.LN10));
+                    const step = [1, 2, 5, 10].map(f => f * pow10).find(s => s >= raw);
+                    ctx.font = "11px sans-serif";
+                    ctx.textAlign = "left";
+                    ctx.fillStyle = "#999999";
+                    ctx.strokeStyle = "#3a3a3a";
+                    ctx.lineWidth = 1;
+                    let ticks = 0;
+                    for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step; t + origin <= hpxWindow.viewEnd && ticks < 40; t += step, ++ticks) {
+                        const x = Math.round(xOf(t + origin)) + 0.5;
+                        ctx.beginPath(); ctx.moveTo(x, topMargin - 4); ctx.lineTo(x, height); ctx.stroke();
+                        ctx.fillText(hpxWindow.fmtUs(t), x + 3, 13);
+                    }
+
+                    const bar = Math.max(rh * 0.6, 2);
+                    for (let i = 0; i < rows.length; ++i) {
+                        const r = rows[i];
+                        const y = topMargin + i * rh, mid = y + rh / 2;
+                        if (i === hpxWindow.hoverIndex) {
+                            ctx.fillStyle = "rgba(255,255,255,0.10)";
+                            ctx.fillRect(0, y, width, rh);
+                        }
+                        if (rh >= 11) {         // labels only if there is room for them
+                            ctx.fillStyle = "#dddddd";
+                            ctx.font = "11px sans-serif";
+                            ctx.fillText("L#" + r.src + " > L#" + r.dst + "  " + hpxWindow.fmtSize(r.size) + "  " + hpxWindow.actionTag(r.action), 8, mid + 4);
+                        }
+                        if (r.tc >= 0) {
+                            const we = hpxWindow.waitEnd(r);
+                            if (we > r.tc) {
+                                ctx.fillStyle = hpxWindow.waitColor;
+                                ctx.fillRect(xOf(r.tc), mid - bar / 2, Math.max(xOf(we) - xOf(r.tc), 1.5), bar);
+                            }
+                            ctx.fillStyle = hpxWindow.preColor;
+                            ctx.fillRect(xOf(we), mid - bar / 2, Math.max(xOf(r.t0s) - xOf(we), 1.5), bar);
+                        }
+                        // one MPI box: send on top (green, light green while the request is open), receive below (red)
+                        const top = mid - bar / 2, half = bar / 2;
+                        const boxL = xOf(Math.min(r.t0s, r.rs)), boxR = xOf(Math.max(r.t0, r.rq, r.t1));
+                        ctx.fillStyle = hpxWindow.mpiSendColor;
+                        ctx.fillRect(xOf(r.t0s), top, Math.max(xOf(r.t0) - xOf(r.t0s), 2), half);
+                        if (r.rq > r.t0)
+                            hpxWindow.openRequest(ctx, xOf(r.t0), top, Math.max(xOf(r.rq) - xOf(r.t0), 1.5), half);
+                        ctx.fillStyle = hpxWindow.mpiRecvColor;
+                        ctx.fillRect(xOf(r.rs), top + half, Math.max(xOf(r.t1) - xOf(r.rs), 2), half);
+                        hpxWindow.mpiFrame(ctx, boxL, top, Math.max(boxR - boxL, 4), bar);
+                        if (r.tr > r.t1) {
+                            ctx.fillStyle = hpxWindow.recvColor;
+                            ctx.fillRect(xOf(r.t1), mid - bar / 2, Math.max(xOf(r.tr) - xOf(r.t1), 1.5), bar);
+                        }
+                        if (r.td > r.tr) {
+                            ctx.fillStyle = hpxWindow.actionColor;
+                            ctx.fillRect(xOf(r.tr), mid - bar / 2, Math.max(xOf(r.td) - xOf(r.tr), 1.5), bar);
+                        }
+                        if (r.ts >= 0) {
+                            ctx.fillStyle = "#ffffff";
+                            ctx.fillRect(xOf(r.ts) - 0.5, mid - bar / 2 - 2, 1.5, bar + 4);
+                        }
+                        if (hpxWindow.criticalOn && r.crit) {                  // on the critical path: gold marker and outline
+                            ctx.fillStyle = "#ffd600";
+                            ctx.fillRect(0, y + 1, 5, Math.max(rh - 2, 2));
+                            ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 1.2;
+                            ctx.strokeRect(xOf(Math.min(r.tc >= 0 ? r.tc : r.t0s, r.t0s)) - 1, mid - bar / 2 - 1,
+                                           Math.max(xOf(Math.max(r.t1, r.tr, r.td)) - xOf(Math.min(r.tc >= 0 ? r.tc : r.t0s, r.t0s)) + 2, 4), bar + 2);
+                        }
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    property real pressX: 0
+                    property real startAt: 0
+                    property real endAt: 0
+                    onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
+                    onWheel: (w) => {
+                        const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
+                        const tc = waterfall.tOf(w.x);
+                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                    }
+                    onPositionChanged: (e) => {
+                        if (pressed) {
+                            const dt = (e.x - pressX) / (waterfall.width - waterfall.leftMargin - waterfall.rightMargin) * (endAt - startAt);
+                            hpxWindow.setView(startAt - dt, startAt - dt + (endAt - startAt));
+                            return;
+                        }
+                        const i = Math.floor((e.y - waterfall.topMargin) / waterfall.rowHeight());
+                        const n = i >= 0 && i < hpxWindow.rows.length ? i : -1;
+                        if (n !== hpxWindow.hoverIndex) {
+                            hpxWindow.hoverIndex = n;
+                            waterfall.requestPaint();
+                        }
+                    }
+                }
+            }
+        }
+
+        // legend and the details of what is under the mouse
+        RowLayout {
+            Layout.fillWidth: true
+            visible: run.loaded
+            spacing: 12
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.waitColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "waits for data" } }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.preColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX prepares" } }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.mpiSendColor; border.color: hpxWindow.mpiColor; border.width: 1.5; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "MPI send" } }
+            Row { spacing: 5
+                Canvas {
+                    width: 20; height: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    onPaint: {
+                        const ctx = getContext("2d");
+                        ctx.reset();
+                        hpxWindow.openRequest(ctx, 0, 0, 20, 10);
+                        hpxWindow.mpiFrame(ctx, 0, 0, 20, 10);
+                    }
+                }
+                Label { color: "white"; text: "send open" }
+            }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.mpiRecvColor; border.color: hpxWindow.mpiColor; border.width: 1.5; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "MPI receive" } }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.recvColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX picks up" } }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.actionColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "action runs" } }
+            Row { spacing: 5; Rectangle { width: 2; height: 14; color: "white" } Label { color: "white"; text: "send noticed by HPX" } }
+            Label { color: hpxWindow.mpiColor; font.bold: true; text: "→ data (blue frame = MPI)"; visible: hpxWindow.viewMode === "locality" }
+            Label { color: "#ffd600"; font.bold: true; text: "gold = critical path"; visible: hpxWindow.criticalOn && hpxWindow.hasTree }
+            Item { Layout.fillWidth: true }
+        }
+        Label {
+            Layout.fillWidth: true
+            visible: run.loaded
+            color: "#dddddd"
+            elide: Text.ElideRight
+            text: {
+                if (hpxWindow.viewMode === "tree")
+                    return hpxWindow.treeInfoText(hpxWindow.treeHover >= 0 ? hpxWindow.treeEdges[hpxWindow.treeHover] : null);
+                const lm = hpxWindow.laneHover >= 0 ? hpxWindow.laneMsgs[hpxWindow.laneHover] : undefined;
+                const r = hpxWindow.viewMode === "locality"
+                    ? (lm ? lm.row : null)
+                    : (hpxWindow.hoverIndex >= 0 ? hpxWindow.rows[hpxWindow.hoverIndex] : null);
+                return hpxWindow.infoText(r ? r : null);
+            }
+        }
+    }
+
+    // start screen
+    ColumnLayout {
+        anchors.centerIn: parent
+        visible: !run.loaded
+        spacing: 14
+        Image {
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredHeight: Math.max(160, Math.min(460, hpxWindow.height - 330))
+            Layout.preferredWidth: Layout.preferredHeight * sourceSize.width / Math.max(1, sourceSize.height)
+            source: "qrc:/qt/qml/EduHPX/assets/logo.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+            mipmap: true
+        }
+        Label { Layout.alignment: Qt.AlignHCenter; color: "#cccccc"; text: "Open a run file (.csv) or drop it here." }
+        Button { Layout.alignment: Qt.AlignHCenter; text: "Open run file..."; onClicked: fileDialog.open() }
+        Button { Layout.alignment: Qt.AlignHCenter; text: "Example: flat broadcast"
+                 onClicked: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/flat_broadcast_16loc_4nodes.csv") }
+        Button { Layout.alignment: Qt.AlignHCenter; text: "Example: tree broadcast"
+                 onClicked: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/hierarchical_broadcast_16loc_4nodes.csv") }
+    }
+}
