@@ -25,14 +25,14 @@ but knows nothing about parcels. **EduHPX puts both on one timeline**: for every
 
 ## Download
 
-Ready-made viewer (version 0.0.1), built by the workflows on the branch `deploy`:
+Ready-made viewer (version 0.0.2), built by the workflows on the branch `deploy`:
 
 | System | File |
 |---|---|
-| Linux | [`EduHPX_0.0.1-x86_64.AppImage`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1-x86_64.AppImage): make it executable (`chmod +x`), then start it |
-| macOS | [`EduHPX_0.0.1.dmg`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1.dmg): the app is not signed, see the note below |
-| Windows | [`EduHPX_0.0.1-windows.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1-windows.zip): unpack, start `eduhpx.exe` |
-| Example run files | [`EduHPX_0.0.1_examples.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.1/EduHPX_0.0.1_examples.zip), also built into the app: *File > Examples* |
+| Linux | [`EduHPX_0.0.2-x86_64.AppImage`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.2/EduHPX_0.0.2-x86_64.AppImage): make it executable (`chmod +x`), then start it |
+| macOS | [`EduHPX_0.0.2.dmg`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.2/EduHPX_0.0.2.dmg): the app is not signed, see the note below |
+| Windows | [`EduHPX_0.0.2-windows.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.2/EduHPX_0.0.2-windows.zip): unpack, start `eduhpx.exe` |
+| Example run files | [`EduHPX_0.0.2_examples.zip`](https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.2/EduHPX_0.0.2_examples.zip), also built into the app: *File > Examples* |
 
 All releases: <https://github.com/FuldaHPC/tool-eduhpx/releases>. The three downloads also contain the examples.
 
@@ -65,7 +65,7 @@ Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once
    3. Run: `scripts/eduhpx-run --mpi <measuring MPI> --hpx <HPX> --out my_run -- mpirun -np 16 ./app ...`, then open
       `my_run/run.csv` with EduHPX ([details](scripts/README.md)).
 
-**Status (2026-11-05):** the viewer is released (0.0.1). The whole chain from a program to `run.csv` was tested on one
+**Status (2026-11-05):** the viewer is released (0.0.2). The whole chain from a program to `run.csv` was tested on one
 cluster (4 nodes, 16 localities, flat and hierarchical broadcast); macOS and runs without Slurm are not tested yet.
 
 ## Screenshots
