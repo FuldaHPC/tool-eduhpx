@@ -700,8 +700,8 @@ ApplicationWindow {
             found.push({call: call, answer: answer, set: isSet, lost: lostCall});
         }
         const nodeCount = Object.keys(nodes).length;
-        if (nodeCount < 3 || found.length !== nodeCount - 1)
-            return;                                          // not a tree
+        if (nodeCount < 3 || found.length >= nodeCount || nodeCount - found.length > 4)
+            return;                                          // not a tree (or a few of them: the halves of a hierarchical all-to-all)
         const up = sets * 2 > found.length;                  // the data moves towards the root
         for (const f of found) {
             f.p = f.call.dst; f.c = f.call.src;
@@ -740,9 +740,8 @@ ApplicationWindow {
             parentRow[c] = data;
         }
         const rootList = Object.keys(nodes).filter(l => !hasParent[l]);
-        if (rootList.length !== 1)
+        if (rootList.length < 1 || rootList.length !== nodeCount - found.length)
             return;
-        const root = parseInt(rootList[0]);
         // layout: depth = level, x = position among the leaves; the tree must reach every node from the root
         const map = {};
         let leaf = 0, maxDepth = 0;
@@ -761,7 +760,8 @@ ApplicationWindow {
             map[loc] = {loc: loc, depth: depth, x: x, leaf: kids.length === 0};
             return x;
         };
-        place(root, 0);
+        for (const rt of rootList.map(x => parseInt(x)).sort((a, b) => a - b))
+            place(rt, 0);
         if (Object.keys(map).length !== nodeCount)
             return;
         treeNodeMap = map;
@@ -1262,12 +1262,13 @@ ApplicationWindow {
                 }
                 onWidthChanged: requestPaint()
                 onHeightChanged: requestPaint()
+                onVisibleChanged: if (visible) requestPaint()
 
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    if (!run.loaded || hpxWindow.laneInfo.length === 0)
-                        return;
+                    if (!visible || !run.loaded || hpxWindow.laneInfo.length === 0)
+                        return;                                  // a hidden view must not touch the shared scroll state
                     layout();
                     const msgs = hpxWindow.laneMsgs;
                     const bh = trackH * 0.7;
@@ -1626,12 +1627,13 @@ ApplicationWindow {
                 }
                 onWidthChanged: requestPaint()
                 onHeightChanged: requestPaint()
+                onVisibleChanged: if (visible) requestPaint()
 
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    if (!run.loaded)
-                        return;
+                    if (!visible || !run.loaded)
+                        return;                                  // a hidden view must not touch the shared scroll state
                     const rows = hpxWindow.rows;
                     const rh = rowHeight();
                     hpxWindow.contentH = topMargin + 6 + rows.length * rh;

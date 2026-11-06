@@ -16,7 +16,8 @@ File name: `<collective>_<flat|hier>_<localities>loc_<nodes>nodes.csv`.
 | `scatter` | blocks move down the tree |
 | `allreduce` | a reduce up, then a broadcast down |
 | `allgather` | a gather up, then a broadcast down |
-| `alltoall`, `alltoall_large` (8 KiB per pair) | all-to-all together with a gather and a scatter |
+| `alltoall`, `alltoall_large` (8 KiB per pair) | a gather inside each half of the localities, an exchange between the two roots (L#0 and L#8 with 16 localities), a scatter inside each half. The viewer shows the gather and the scatter as two trees side by side |
+| `alltoall_pairwise` (flat only) | every locality sends to every other one through its own channel (fixed-size elements of 8 KiB); no tree, a complete graph |
 | `scan_ex`, `scan_in` (exclusive / inclusive scan) | a gather and a scatter |
 | `barrier` | the barrier of HPX, flat or as a tree |
 
@@ -36,6 +37,11 @@ barriers that HPX itself runs at the start and the end remain as groups.
   last locality) is created early and sent late; the parcel log has no time for "the data became ready", so that waiting
   is drawn as *HPX prepares* (for example the long bars at the root of a flat all-to-all). The tree view of a broadcast
   separates it as *waits for data*.
+- **Data, requests, confirmations.** A call of HPX (`get_direct` / `set_direct`) goes from a locality to its parent, the
+  parent answers. For a get the data is in the answer (the call is the request); for a set the data is in the call and the
+  answer only confirms it (the button says *Confirmations*); an all-gather carries data in both directions.
+- **On the critical path of a gather or reduce, "action" includes waiting.** It is the time from the arrival of the data at
+  a parent until the parent sends its own data, so it also contains the wait for its other children.
 - **A few parcels have no MPI data** (2 % without a matching MPI receive, 0.3 % without a send). They are counted in the
   title but not drawn. Parcels with several zero-copy chunks, and the small internal messages of barriers and scans, are the
   most likely to be affected.

@@ -3,6 +3,8 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
+#include <QMouseEvent>
+#include <QWheelEvent>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -37,6 +39,27 @@ int render(QQuickWindow *window, QObject *root, const QString &dir, const QStrin
         QMetaObject::invokeMethod(root, "showView", Q_ARG(QVariant, part[2]));
         QMetaObject::invokeMethod(root, "showGroup", Q_ARG(QVariant, part[0]), Q_ARG(QVariant, part[1].toInt()));
         wait(600);
+        if (qEnvironmentVariable("EDUHPX_SCROLL") == QLatin1String("wheel")) {   // test: real wheel and mouse events down to the end
+            const QPointF pos(window->width() / 2.0, window->height() / 2.0 + 60);
+            double before = -1;
+            for (int i = 0; i < 70; ++i) {
+                QMouseEvent move(QEvent::MouseMove, pos + QPointF(i % 5, 0), window->mapToGlobal(pos.toPoint()), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &move);
+                QWheelEvent w(pos, window->mapToGlobal(pos.toPoint()), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &w);
+                wait(40);
+                const double y = root->property("scrollY").toDouble();
+                std::printf("WHEEL %d scrollY=%.1f contentH=%.1f%s\n", i, y, root->property("contentH").toDouble(), y < before ? "  <-- JUMP BACK" : "");
+                before = y;
+            }
+        }
+        if (qEnvironmentVariable("EDUHPX_SCROLL") == QLatin1String("1")) {       // test: scroll to the end and see whether it stays there
+            QMetaObject::invokeMethod(root, "scrollBy", Q_ARG(QVariant, 1e7), Q_ARG(QVariant, 0));
+            for (int i = 0; i < 4; ++i) {
+                wait(300);
+                std::printf("SCROLL step %d scrollY=%f contentH=%f\n", i, root->property("scrollY").toDouble(), root->property("contentH").toDouble());
+            }
+        }
         const QString file = QDir(dir).filePath(part[0] + part[1] + QLatin1Char('_') + part[2] + QLatin1String(".png"));
         const QImage image = window->grabWindow();
         if (image.isNull() || !image.save(file)) {
