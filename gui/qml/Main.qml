@@ -608,7 +608,7 @@ ApplicationWindow {
                 add("pick", cur.t1, cur.tr, cur);
                 isFinal = false;
             }
-            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
+            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1), cur);
             const we = waitEnd(cur);
             add("prepare", we, cur.t0s, cur);
             const up = into[cur.src];
@@ -618,9 +618,9 @@ ApplicationWindow {
             }
             const rq = asks[cur.dst];
             if (rq) {
-                add("parent", rq.tr, Math.max(cur.tc, rq.tr), rq);
+                add("parent", Math.max(rq.tr, rq.t1), Math.max(cur.tc, rq.tr, rq.t1), rq);
                 add("pick", rq.t1, rq.tr, rq);
-                add("mpi", rq.t0s, Math.max(rq.t0, rq.t1, rq.rq), rq);
+                add("mpi", rq.t0s, Math.max(rq.t0, rq.t1), rq);
                 add("prepare", waitEnd(rq), rq.t0s, rq);
             }
             break;
@@ -776,6 +776,8 @@ ApplicationWindow {
         // critical path: from the data message that arrives last, back over what each sender waited for
         let last = null, lastEnd = -Infinity;
         for (const e of edges) {
+            if (up && hasParent[e.p])
+                continue;                                    // up: the group is done when a root has the data, not earlier inside the tree
             const r = e.data, t = Math.max(r.t1, r.tr, r.td);
             if (t > lastEnd) { lastEnd = t; last = r; }
         }
@@ -793,7 +795,7 @@ ApplicationWindow {
                 add("pick", cur.t1, cur.tr, cur);
                 final = false;
             }
-            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
+            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1), cur);
             const created = cur.tc >= 0 ? cur.tc : cur.t0s;
             let from = null;                                  // what the sender had to wait for
             if (up) {
@@ -821,9 +823,9 @@ ApplicationWindow {
                     // a child of the root: its request and the wait of the request at the root
                     const rq = rqOfCur;
                     if (rq) {
-                        add("parent", rq.tr, Math.max(created, rq.tr), rq);
+                        add("parent", Math.max(rq.tr, rq.t1), Math.max(created, rq.tr, rq.t1), rq);
                         add("pick", rq.t1, rq.tr, rq);
-                        add("mpi", rq.t0s, Math.max(rq.t0, rq.t1, rq.rq), rq);
+                        add("mpi", rq.t0s, Math.max(rq.t0, rq.t1), rq);
                         add("prepare", rq.tc >= 0 ? rq.tc : rq.t0s, rq.t0s, rq);
                     }
                 }
