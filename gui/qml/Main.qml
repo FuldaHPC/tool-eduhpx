@@ -881,6 +881,10 @@ ApplicationWindow {
             return "Hover an edge: when the child asked, what it waited for, what HPX did and how long MPI took.";
         const d = e.data, q = e.req;
         const we = waitEnd(d);
+        if (d.missing || (q && q.missing))                   // times of the parcel log stand in for the MPI message
+            return "L#" + (e.up ? e.c : e.p) + " → L#" + (e.up ? e.p : e.c) + ":  no MPI message was recorded for "
+                + (d.missing ? "this parcel" : "the request of this edge") + ", its times are those of the HPX parcel log (the MPI time is not known)."
+                + (d.t1 > treeStart ? "  Arrived at +" + fmtUs(d.t1 - treeStart) : "");
         if (e.up)                                             // the data goes up in the call, the answer only confirms it
             return "L#" + e.c + " → L#" + e.p + ":  "
                 + (d.tc >= 0 && we > d.tc ? "waited " + fmtUs(we - d.tc) + " for its children,  " : "")
@@ -1498,11 +1502,14 @@ ApplicationWindow {
                 }
                 // arrow: the head grows with the width of the line and the shaft ends inside the head (a shaft that runs to the
                 // tip pokes out in front of the head)
-                function arrowHead(ctx, x0, y0, x1, y1, w, color) {
+                function arrowHead(ctx, x0, y0, x1, y1, w, color, dashed) {
                     const ang = Math.atan2(y1 - y0, x1 - x0), h = 8 * sc + w * 2.6;
                     const bx = x1 - h * 0.8 * Math.cos(ang), by = y1 - h * 0.8 * Math.sin(ang);
                     ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w;
+                    if (dashed)
+                        ctx.setLineDash([5 * sc, 4 * sc]);       // no MPI message was recorded: the times come from the parcel log
                     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, by); ctx.stroke();
+                    ctx.setLineDash([]);
                     ctx.beginPath(); ctx.moveTo(x1, y1);
                     ctx.lineTo(x1 - h * Math.cos(ang - 0.42), y1 - h * Math.sin(ang - 0.42));
                     ctx.lineTo(x1 - h * Math.cos(ang + 0.42), y1 - h * Math.sin(ang + 0.42));
@@ -1539,13 +1546,13 @@ ApplicationWindow {
                         const wData = Math.max((2 + Math.min(Math.sqrt(e.data.size) / 150, 2)) * sc, 1) + (onPath || hot ? 1 : 0);
                         const wReq = Math.max(1.2 * sc, 0.8) + (onPath || hot ? 1 : 0);
                         if (e.up) {                                    // the data moves up: it uses the line from the child to the parent
-                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wData, dataColor);
+                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wData, dataColor, e.data.missing);
                             if (e.req)
-                                arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wReq, reqColor);
+                                arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wReq, reqColor, e.req.missing);
                         } else {
-                            arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wData, dataColor);
+                            arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wData, dataColor, e.data.missing);
                             if (e.req)
-                                arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wReq, reqColor);
+                                arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wReq, reqColor, e.req.missing);
                         }
                         // the time this hop took: from the arrival at the parent (or the request, at the root) to the arrival here
                         const up = hpxWindow.treeNodeMap[e.p] ? e.data : null;
@@ -1604,6 +1611,7 @@ ApplicationWindow {
                     ctx.fillStyle = "#999999";
                     ctx.font = "11px sans-serif";
                     ctx.fillText((hpxWindow.treeUp ? "white: data to the parent   orange: the message back   +t: time of the hop   all data +t: the node had the data of all its children" : "white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the group")
+                                 + (hpxWindow.treeEdges.some(x => x.data.missing || (x.req && x.req.missing)) ? "   dashed: no MPI message recorded, times from the parcel log" : "")
                                  + (compact ? "   (many localities: hover an edge for its times)" : ""), 14, height - 14);
                 }
 
