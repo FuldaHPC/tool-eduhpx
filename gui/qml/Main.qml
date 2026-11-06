@@ -789,13 +789,13 @@ ApplicationWindow {
             if (b > a)
                 segs.push({kind: kind, a: a, b: b});
         };
-        let cur = last, final = true, guard = 0;
+        let cur = last, isFinal = true, guard = 0;
         while (cur && guard++ < 64) {
             hops.push(cur);
-            if (final) {
+            if (isFinal) {
                 add("action", cur.tr, cur.td, cur);
                 add("pick", cur.t1, cur.tr, cur);
-                final = false;
+                isFinal = false;
             }
             add("mpi", cur.t0s, Math.max(cur.t0, cur.t1), cur);
             const created = cur.tc >= 0 ? cur.tc : cur.t0s;
