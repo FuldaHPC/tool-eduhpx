@@ -239,7 +239,7 @@ ApplicationWindow {
                 ++skippedCount;
                 if (m.group_kind !== undefined && m.group !== undefined)       // kept for the tree: its parcel is known, only the MPI message is not
                     (lostByKey[m.group_kind + "#" + m.group] = lostByKey[m.group_kind + "#" + m.group] || []).push(
-                        {src: m.src, dst: m.dst, action: m.action || "", tc: m.hpx_create_us !== undefined ? m.hpx_create_us : -1,
+                        {src: m.src, dst: m.dst, size: m.size, action: m.action || "", tc: m.hpx_create_us !== undefined ? m.hpx_create_us : -1,
                          t0: m.mpi_send_end_us !== undefined ? m.mpi_send_end_us : -1,
                          tr: m.tracy_recv_us !== undefined ? m.tracy_recv_us : -1, td: m.hpx_done_us !== undefined ? m.hpx_done_us : -1});
                 continue;
@@ -612,7 +612,7 @@ ApplicationWindow {
             const we = waitEnd(cur);
             add("prepare", we, cur.t0s, cur);
             const up = into[cur.src];
-            if (up && cur.tw > cur.tc) {
+            if (up) {                                         // a forwarding locality sends on what it received, whenever HPX created the parcel
                 cur = up;
                 continue;
             }
@@ -662,6 +662,21 @@ ApplicationWindow {
         for (const r of rows) {
             const key = Math.min(r.src, r.dst) + "-" + Math.max(r.src, r.dst);
             (pairs[key] = pairs[key] || []).push(r);
+        }
+        // parcels without an MPI message are known from the parcel log; they take part in the tree where no row exists
+        // for their direction (their times: end of the send call, HPX receive)
+        for (const lp of (g.lost || [])) {
+            const key = Math.min(lp.src, lp.dst) + "-" + Math.max(lp.src, lp.dst);
+            const list = pairs[key] = pairs[key] || [];
+            if (list.some(m => m.src === lp.src && m.dst === lp.dst))
+                continue;
+            const t0 = lp.t0 >= 0 ? lp.t0 : (lp.tc >= 0 ? lp.tc : lp.tr);
+            const t1 = Math.max(t0, lp.tr);
+            if (t0 < 0)
+                continue;
+            list.push({src: lp.src, dst: lp.dst, size: lp.size, tc: lp.tc >= 0 ? Math.min(lp.tc, t0) : t0, t0s: t0, t0: t0, t1: t1,
+                       tr: t1, td: lp.td >= 0 ? Math.max(lp.td, t1) : -1, ts: -1, rq: t1, rs: t1, action: lp.action, chunk: false,
+                       exact: false, tw: -1, kind: g.kind, idx: g.k, missing: true});
         }
         const found = [];                                    // {call, answer, set}
         const nodes = {};
@@ -1008,7 +1023,7 @@ ApplicationWindow {
                             {name: "MPI", v: hpxWindow.pathMpi, c: hpxWindow.mpiColor},
                             {name: "HPX picks up", v: hpxWindow.pathPick, c: hpxWindow.recvColor},
                             {name: "request waits at parent", v: hpxWindow.pathParent, c: hpxWindow.parentColor},
-                            {name: "action", v: hpxWindow.pathAction, c: hpxWindow.actionColor}
+                            {name: hpxWindow.treeUp ? "action + waiting for the other children" : "action", v: hpxWindow.pathAction, c: hpxWindow.actionColor}
                         ]
                         delegate: Rectangle {
                             required property var modelData
@@ -1804,7 +1819,7 @@ ApplicationWindow {
             }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.mpiRecvColor; border.color: hpxWindow.mpiColor; border.width: 1.5; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "MPI receive" } }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.recvColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX picks up" } }
-            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.actionColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "action runs" } }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.actionColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: hpxWindow.criticalOn && hpxWindow.hasTree && hpxWindow.treeUp ? "action runs (on the path: incl. waiting for the other children)" : "action runs" } }
             Row { spacing: 5; visible: hpxWindow.sumParent > 0; Rectangle { width: 20; height: 10; color: hpxWindow.parentColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "request waits at parent" } }
             Row { spacing: 5; Rectangle { width: 2; height: 14; color: "white" } Label { color: "white"; text: "send noticed by HPX" } }
             Row { spacing: 5; visible: hpxWindow.viewMode === "locality"; Label { color: hpxWindow.recvColor; font.bold: true; text: "\u25C6" } Label { color: "white"; text: "HPX saw the header of a large message" } }
