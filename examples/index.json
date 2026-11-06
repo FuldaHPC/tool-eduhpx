@@ -321,6 +321,25 @@
    ]
   },
   {
+   "id": "alltoall_pairwise",
+   "title": "All-to-all, pairwise",
+   "note": "From 4 KiB per destination on HPX leaves the central communicator: every locality sends directly to every other one (here 8 KiB each).",
+   "examples": [
+    {
+     "file": "alltoall_pairwise_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_pairwise_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    }
+   ]
+  },
+  {
    "id": "scan_ex",
    "title": "Exclusive scan",
    "note": "Prefix sum over the localities, without the own value. In the tree variant HPX uses gather and scatter.",

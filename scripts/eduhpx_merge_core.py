@@ -335,18 +335,30 @@ def main():
         op = collective_op(m["action"])
         seen[(op, m["src"])] += 1
         m["group_kind"], m["group"] = op, seen[(op, m["src"])]
-    replies = collections.defaultdict(list)          # (sender, receiver) -> parcels that could be replies
+    # The answers: a collective is a call of a locality to its parent (get/set action) and an answer of the parent, a parcel
+    # of the action base_lco_with_val. The answer can come much later than the call (it waits for the other localities), so
+    # it is not looked for in a time window: the k-th call of a pair belongs to the k-th answer after it has arrived.
+    replies = collections.defaultdict(list)          # (sender, receiver) -> answers, in the order they were created
     for m in messages:
-        if "group_kind" not in m and "hpx_create_us" in m:
+        if "group_kind" not in m and "hpx_create_us" in m and "base_lco_with_val" in (m.get("action") or ""):
             replies[(m["src"], m["dst"])].append(m)
+    for v in replies.values():
+        v.sort(key=lambda r: r["hpx_create_us"])
     reply_slack_us = 100.0
     for m in sorted(requests, key=start_of):
-        if "tracy_recv_us" not in m or "hpx_done_us" not in m:
+        if "tracy_recv_us" not in m:
             continue
         for r in replies.get((m["dst"], m["src"]), []):
-            if "group_kind" not in r and m["tracy_recv_us"] - reply_slack_us <= r["hpx_create_us"] <= m["hpx_done_us"] + reply_slack_us:
+            if "group_kind" not in r and r["hpx_create_us"] >= m["tracy_recv_us"] - reply_slack_us:
                 r["group_kind"], r["group"] = m["group_kind"], m["group"]
                 break
+    # the pairwise all-to-all (from 4 KiB per destination on): every locality sends its block directly to every other one,
+    # a parcel of the channel communicator. The k-th message of a (sender, receiver) pair belongs to the k-th repetition.
+    seen_pair = collections.Counter()
+    for m in sorted(messages, key=start_of):
+        if "group_kind" not in m and "channel_communicator_server::set_action" in (m.get("action") or ""):
+            seen_pair[(m["src"], m["dst"])] += 1
+            m["group_kind"], m["group"] = "all_to_all_pairwise", seen_pair[(m["src"], m["dst"])]
     rest = sorted((m for m in messages if "group_kind" not in m), key=start_of)
     lives = sorted(end_of(m) - start_of(m) for m in rest)
     gap_us = max(100.0, 3 * lives[len(lives) // 2]) if lives else 100.0

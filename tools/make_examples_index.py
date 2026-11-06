@@ -17,6 +17,7 @@ INFO = [
     ("scatter", "Scatter", "The root sends a different block to every locality."),
     ("alltoall", "All-to-all", "Every locality sends a small value to every other one. In the tree variant HPX also uses gather and scatter."),
     ("alltoall_large", "All-to-all, large messages", "The same with 8 KiB per pair."),
+    ("alltoall_pairwise", "All-to-all, pairwise", "From 4 KiB per destination on HPX leaves the central communicator: every locality sends directly to every other one (here 8 KiB each)."),
     ("scan_ex", "Exclusive scan", "Prefix sum over the localities, without the own value. In the tree variant HPX uses gather and scatter."),
     ("scan_in", "Inclusive scan", "Prefix sum over the localities, with the own value. In the tree variant HPX uses gather and scatter."),
     ("barrier", "Barrier", "All localities wait for each other."),

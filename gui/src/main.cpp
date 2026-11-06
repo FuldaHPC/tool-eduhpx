@@ -87,6 +87,17 @@ int main(int argc, char *argv[])
     }
     if (rendering) {
         auto *window = qobject_cast<QQuickWindow *>(root);
+        if (!qEnvironmentVariable("EDUHPX_REOPEN").isEmpty()) {     // test: open a second file while a late group is selected
+            QMetaObject::invokeMethod(root, "select", Q_ARG(QVariant, 30));
+            const QString other = qEnvironmentVariable("EDUHPX_REOPEN");
+            QMetaObject::invokeMethod(root, "openFile", Q_ARG(QVariant, QUrl::fromLocalFile(QDir::current().absoluteFilePath(other))));
+            wait(500);
+        }
+        if (qEnvironmentVariable("EDUHPX_PATH_REPORT") == QLatin1String("1")) {
+            QVariant report;
+            QMetaObject::invokeMethod(root, "pathReport", Q_RETURN_ARG(QVariant, report));
+            std::printf("PATHREPORT %s\n", qPrintable(report.toString()));
+        }
         if (qEnvironmentVariable("EDUHPX_START_PAGE") == QLatin1String("1"))
             QMetaObject::invokeMethod(root, "showStartPage");   // test: back to the start page after a run was loaded
         if (qEnvironmentVariable("EDUHPX_CRITICAL") == QLatin1String("1"))

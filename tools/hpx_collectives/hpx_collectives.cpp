@@ -1,11 +1,12 @@
 // One HPX collective, flat or hierarchical, repeated: the examples of EduHPX.
-//   COLL = bcast | reduce | allreduce | gather | allgather | scatter | alltoall | alltoall_large | scan_ex | scan_in | barrier
+//   COLL = bcast | reduce | allreduce | gather | allgather | scatter | alltoall | alltoall_large | alltoall_pairwise | scan_ex | scan_in | barrier
 //   COLL_KIND = flat | hier   COLL_ARITY (hier, default 2)   COLL_ITER (default 10)   COLL_INTS (payload ints, default 1024)
 #include <hpx/hpx_init.hpp>
 #include <hpx/include/runtime.hpp>
 #include <hpx/modules/collectives.hpp>
 #include <hpx/thread.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -133,6 +134,25 @@ int hpx_main()
     std::size_t const ints = static_cast<std::size_t>(env_long("COLL_INTS", 1024));
     std::string const base = "/eduhpx/" + coll + "_" + kind + "/";
     int rc;
+    if (coll == "alltoall_pairwise")
+    {
+        // all_to_all by name: from 4 KiB per destination on HPX leaves the central communicator and exchanges pairwise
+        // (every locality sends to every other one) over channels
+        std::uint64_t checksum = 0;
+        for (int i = 0; i != iterations; ++i)
+        {
+            // a type of fixed size: HPX only decides for the pairwise exchange if it knows the bytes per destination
+            std::vector<std::array<int, 2048>> values(n);
+            for (auto& block : values)
+                block.fill(static_cast<int>(here) + i);
+            checksum += all_to_all(base.c_str(), std::move(values), num_sites_arg(n), this_site_arg(here),
+                generation_arg(i + 1)).get().size();
+        }
+        std::cerr << "locality " << here << "/" << n << " done: " << iterations << " x " << coll << ", checksum " << checksum << std::endl;
+        hpx::finalize();
+        (void) ints;
+        return 0;
+    }
     if (kind == "hier")
     {
         auto comm = create_hierarchical_communicator(base.c_str(), num_sites_arg(n), this_site_arg(here), arity_arg(arity),

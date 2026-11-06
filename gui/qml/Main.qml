@@ -82,7 +82,9 @@ ApplicationWindow {
     readonly property bool showPath: pathOn && criticalOn      // summary: the critical path (real time), else all messages added up
     property int pathHops: 0
     property real sumWire: 0        // MPI transfer only: from the end of the send call to the end of the receive
-    readonly property real groupSpan: groups.length > 0 ? groups[current].end - groups[current].start : 0
+    // the group that is shown; null while the list of groups and the index are out of step (a new file, the start page)
+    readonly property var currentGroup: current >= 0 && current < groups.length ? groups[current] : null
+    readonly property real groupSpan: currentGroup ? currentGroup.end - currentGroup.start : 0
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
     property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
@@ -177,6 +179,28 @@ ApplicationWindow {
     // open a run file (a URL; also called from the command line and by drag and drop)
     function openFile(url) {
         run.load(url);
+    }
+    // for the tests: the critical path of every group as JSON (eduhpx with EDUHPX_PATH_REPORT=1 prints it)
+    function pathReport() {
+        const out = [];
+        for (let i = 0; i < groups.length; ++i) {
+            select(i);
+            const base = {kind: groups[i].kind, k: groups[i].k, messages: rows.length};
+            if (!hasTree) {
+                out.push(Object.assign(base, {tree: false}));
+                continue;
+            }
+            let covered = 0;
+            for (const sg of pathSegs)
+                covered += sg.b - sg.a;
+            const edgeList = treeEdges.map(e => [e.p, e.c, e.data.src, e.data.dst]);
+            out.push(Object.assign(base, {tree: true, up: treeUp, chain: pathChain, hops: pathHops, depth: treeDepth, nodes: treeNodes.length,
+                                          length: pathLength, span: groupSpan, covered: covered, start: pathStart, end: pathEnd,
+                                          parts: {prepare: pathPrepare, mpi: pathMpi, pick: pathPick, parent: pathParent, action: pathAction},
+                                          edges: edgeList, segs: pathSegs.map(x => [x.kind, Math.round(x.a - groups[i].start), Math.round(x.b - groups[i].start)])}));
+        }
+        select(0);
+        return JSON.stringify(out);
     }
     function showStartPage() {          // also used by the headless preview
         run.unload();
@@ -284,7 +308,7 @@ ApplicationWindow {
 
     // broadcast: the action of a small request is the time it waits at the parent until the reply is created
     function isRequestWait(r) {
-        return groups.length > 0 && groups[current].kind === "broadcast" && !r.big;
+        return currentGroup !== null && currentGroup.kind === "broadcast" && !r.big;
     }
 
     function select(i) {
@@ -334,16 +358,36 @@ ApplicationWindow {
             maxSize = Math.max(maxSize, r.size);
             minSize = Math.min(minSize, r.size);
         }
-        const dataOnly = maxSize > 2 * minSize;
-        hasDataClass = dataOnly;
-        for (const r of rows)
-            r.big = !dataOnly || r.size >= maxSize / 2;
+        let dataOnly = maxSize > 2 * minSize;
+        // A collective is calls (the actions get_direct / set_direct of a locality to its parent) and answers. That tells
+        // the requests from the data whatever the sizes are: for a get the data is in the answer, for a set in the call.
+        const callRe = /communication_(get|set)_direct_action/;
+        let nCalls = 0, nSets = 0;
+        for (const r of rows) {
+            r.isCall = callRe.test(r.action);
+            if (r.isCall) {
+                ++nCalls;
+                if (/communication_set_direct_action/.test(r.action))
+                    ++nSets;
+            }
+        }
+        if (nCalls > 0 && nCalls < rows.length) {
+            const dataInCall = nSets * 2 > nCalls;
+            dataOnly = true;
+            hasDataClass = true;
+            for (const r of rows)
+                r.big = dataInCall ? r.isCall : !r.isCall;
+        } else {
+            hasDataClass = dataOnly;
+            for (const r of rows)
+                r.big = !dataOnly || r.size >= maxSize / 2;
+        }
         const to = {};
         const all = {};
         for (const r of rows) {
             all[r.src] = true;
             all[r.dst] = true;
-            if (dataOnly && r.size < maxSize / 2)
+            if (dataOnly && !r.big)
                 continue;
             (to[r.src] = to[r.src] || {})[r.dst] = true;
         }
@@ -429,12 +473,23 @@ ApplicationWindow {
         pathChain = "";
         treeHover = -1;
         const g = groups[current];
-        if (g && g.kind !== "broadcast" && g.kind !== "burst") {
+        if (g && g.kind !== "broadcast" && g.kind !== "burst" && g.kind !== "barrier") {
             buildGenericTree(g);
             return;
         }
-        if (!g || g.kind !== "broadcast" || !hasDataClass)
+        if (!g || g.kind !== "broadcast")
+            return;                                          // burst, barrier: no tree
+        // A broadcast with large data messages has its own model (it knows the wait for the data of the parent). The
+        // broadcast inside an all-reduce carries small values only: it is built like the other collectives.
+        let maxSz = 0, minSz = Infinity;
+        for (const r of rows) {
+            maxSz = Math.max(maxSz, r.size);
+            minSz = Math.min(minSz, r.size);
+        }
+        if (!hasDataClass || maxSz <= 2 * minSz) {
+            buildGenericTree(g);
             return;
+        }
         const into = {};
         const asks = {};
         const children = {};
@@ -561,50 +616,63 @@ ApplicationWindow {
     // carries two messages, one each way; the larger one is the data and its direction says whether the data moves up
     // (reduce, gather) or down (scatter ...) the tree. The critical path is the chain that finishes the group.
     function buildGenericTree(g) {
+        // Every edge of the tree has a call of the child to its parent (the action get_direct or set_direct) and the
+        // answer of the parent. For a get the data comes back in the answer (down the tree); a set carries the data in
+        // the call (up the tree). Without such an action the larger message of the pair is taken as the data.
+        const callRe = /communication_(get|set)_direct_action/;
         const pairs = {};
         for (const r of rows) {
             const key = Math.min(r.src, r.dst) + "-" + Math.max(r.src, r.dst);
             (pairs[key] = pairs[key] || []).push(r);
         }
-        const dataOf = {}, reqOf = {};
+        const found = [];                                    // {call, answer, set}
         const nodes = {};
-        let pairCount = 0;
+        let calls = 0, sets = 0;
         for (const key of Object.keys(pairs)) {
             const ms = pairs[key].slice().sort((a, b) => b.size - a.size);
-            const d = ms[0];
-            const q = ms.find(m => m.src === d.dst && m.dst === d.src);
-            nodes[d.src] = nodes[d.dst] = true;
-            dataOf[key] = d;
-            reqOf[key] = q;
-            ++pairCount;
+            let call = ms.find(m => callRe.test(m.action));
+            let isSet, lostCall = false;
+            if (call) {
+                isSet = /communication_set_direct_action/.test(call.action);
+                ++calls;
+            } else {
+                call = ms[ms.length - 1];                    // no action name: the smaller message is the call
+                isSet = false;
+                lostCall = ms.length === 1;                  // only one message is known: may be an answer whose call is missing
+            }
+            const answer = ms.find(m => m !== call && m.src === call.dst && m.dst === call.src);
+            nodes[call.src] = nodes[call.dst] = true;
+            if (isSet)
+                ++sets;
+            found.push({call: call, answer: answer, set: isSet, lost: lostCall});
         }
         const nodeCount = Object.keys(nodes).length;
-        if (nodeCount < 3 || pairCount !== nodeCount - 1)
+        if (nodeCount < 3 || found.length !== nodeCount - 1)
             return;                                          // not a tree
-        const inDeg = {}, outDeg = {};
-        for (const key of Object.keys(dataOf)) {
-            const d = dataOf[key];
-            outDeg[d.src] = (outDeg[d.src] || 0) + 1;
-            inDeg[d.dst] = (inDeg[d.dst] || 0) + 1;
+        const up = sets * 2 > found.length;                  // the data moves towards the root
+        for (const f of found) {
+            f.p = f.call.dst; f.c = f.call.src;
+            if (calls > 0 && f.lost && !callRe.test(f.call.action)) {
+                f.p = f.call.src; f.c = f.call.dst;          // the lone message is an answer: its call was lost, turn the direction
+                f.answer = f.call;
+                f.call = null;
+            }
         }
-        const noIn = Object.keys(nodes).filter(l => !inDeg[l]);
-        const noOut = Object.keys(nodes).filter(l => !outDeg[l]);
-        let up;
-        if (noOut.length === 1)
-            up = true;                                       // the data moves towards the root
-        else if (noIn.length === 1)
-            up = false;
-        else
-            return;
-        const root = parseInt(up ? noOut[0] : noIn[0]);
-        const edges = [], children = {}, parentRow = {};
-        for (const key of Object.keys(dataOf)) {
-            const d = dataOf[key];
-            const p = up ? d.dst : d.src, c = up ? d.src : d.dst;
-            edges.push({p: p, c: c, data: d, req: reqOf[key], up: up});
+        const edges = [], children = {}, parentRow = {}, hasParent = {};
+        for (const f of found) {
+            const p = f.p, c = f.c;
+            if (hasParent[c])
+                return;                                      // a node with two parents: not a tree
+            hasParent[c] = true;
+            const data = up ? (f.call || f.answer) : (f.answer || f.call);
+            edges.push({p: p, c: c, data: data, req: up ? f.answer : f.call, up: up});
             (children[p] = children[p] || []).push(c);
-            parentRow[c] = d;
+            parentRow[c] = data;
         }
+        const rootList = Object.keys(nodes).filter(l => !hasParent[l]);
+        if (rootList.length !== 1)
+            return;
+        const root = parseInt(rootList[0]);
         // layout: depth = level, x = position among the leaves; the tree must reach every node from the root
         const map = {};
         let leaf = 0, maxDepth = 0;
@@ -656,29 +724,49 @@ ApplicationWindow {
                 final = false;
             }
             add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
-            add("prepare", cur.tc >= 0 ? cur.tc : cur.t0s, cur.t0s, cur);
+            const created = cur.tc >= 0 ? cur.tc : cur.t0s;
             let from = null;                                  // what the sender had to wait for
             if (up) {
+                // the data of the children: the last one that arrived before this parcel was created
                 for (const e of edges)
-                    if (e.p === cur.src && e.data.t1 <= (cur.tc >= 0 ? cur.tc : cur.t0s) + 20 && (from === null || e.data.t1 > from.t1))
+                    if (e.p === cur.src && e.data.t1 <= created + 20 && (from === null || e.data.t1 > from.t1))
                         from = e.data;
+                add("prepare", created, cur.t0s, cur);
+                if (from) {
+                    add("pick", from.t1, from.tr, from);
+                    add("action", from.tr, Math.max(created, from.tr), from);    // combining the data of the children
+                }
             } else {
-                const pr = parentRow[cur.src];
-                if (pr && pr.t1 <= (cur.tc >= 0 ? cur.tc : cur.t0s) + 20)
-                    from = pr;
-            }
-            if (from) {
-                add("pick", from.t1, from.tr, from);
-                add("action", from.tr, Math.max(cur.tc >= 0 ? cur.tc : cur.t0s, from.tr), from);   // the combining / forwarding at that locality
+                // down: the parcel for the children is created early and waits for the data of the parent
+                from = parentRow[cur.src] || null;
+                if (from && from.dst !== cur.src)
+                    from = null;                              // the answer of the parent is missing (a parcel without MPI data)
+                const edgeOfCur = edges.find(x => x.data === cur);
+                const rqOfCur = edgeOfCur ? edgeOfCur.req : null;
+                // the data cannot be prepared before the parent has its own data, or before the request of the child has arrived
+                add("prepare", Math.max(created, from ? from.tr : (rqOfCur ? rqOfCur.tr : created)), cur.t0s, cur);
+                if (from)
+                    add("pick", from.t1, from.tr, from);
+                else {
+                    // a child of the root: its request and the wait of the request at the root
+                    const rq = rqOfCur;
+                    if (rq) {
+                        add("parent", rq.tr, Math.max(created, rq.tr), rq);
+                        add("pick", rq.t1, rq.tr, rq);
+                        add("mpi", rq.t0s, Math.max(rq.t0, rq.t1, rq.rq), rq);
+                        add("prepare", rq.tc >= 0 ? rq.tc : rq.t0s, rq.t0s, rq);
+                    }
+                }
             }
             cur = from;
         }
-        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0;
+        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0, par = 0;
         for (const sg of segs) {
             a0 = Math.min(a0, sg.a);
             if (sg.kind === "prepare") prep += sg.b - sg.a;
             else if (sg.kind === "mpi") mpi += sg.b - sg.a;
             else if (sg.kind === "pick") pick += sg.b - sg.a;
+            else if (sg.kind === "parent") par += sg.b - sg.a;
             else act += sg.b - sg.a;
         }
         pathSegs = segs;
@@ -689,7 +777,7 @@ ApplicationWindow {
         pathMpi = mpi;
         pathPick = pick;
         pathAction = act;
-        pathParent = 0;
+        pathParent = par;
         pathHops = hops.length;
         const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
         for (let i = hops.length - 1; i >= 0; --i)
@@ -803,13 +891,13 @@ ApplicationWindow {
             Label {
                 color: "white"
                 font.bold: true
-                text: hpxWindow.groups.length > 0 ? hpxWindow.groupLabel(hpxWindow.groups[hpxWindow.current]) : ""
+                text: hpxWindow.groupLabel(hpxWindow.currentGroup)
             }
             Button { text: ">"; enabled: hpxWindow.current < hpxWindow.groups.length - 1; onClicked: hpxWindow.select(hpxWindow.current + 1) }
             Label {
                 color: "white"
-                text: hpxWindow.groups.length > 0
-                    ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groups[hpxWindow.current].end - hpxWindow.groups[hpxWindow.current].start) + " in total"
+                text: hpxWindow.currentGroup
+                    ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groupSpan) + " in total"
                     : ""
             }
             Item { Layout.fillWidth: true }
@@ -1117,7 +1205,7 @@ ApplicationWindow {
                     });
 
                     // time axis, 0 = start of this group
-                    const origin = hpxWindow.groups.length > 0 ? hpxWindow.groups[hpxWindow.current].start : 0;
+                    const origin = hpxWindow.currentGroup ? hpxWindow.currentGroup.start : 0;
                     const span = hpxWindow.viewEnd - hpxWindow.viewStart;
                     const raw = span / 8;
                     const pow10 = Math.pow(10, Math.floor(Math.log(Math.max(raw, 0.001)) / Math.LN10));
@@ -1439,7 +1527,7 @@ ApplicationWindow {
                         return;
                     const rows = hpxWindow.rows;
                     const rh = rowHeight();
-                    const origin = hpxWindow.groups.length > 0 ? hpxWindow.groups[hpxWindow.current].start : 0;
+                    const origin = hpxWindow.currentGroup ? hpxWindow.currentGroup.start : 0;
                     const span = hpxWindow.viewEnd - hpxWindow.viewStart;
                     const raw = span / 8;
                     const pow10 = Math.pow(10, Math.floor(Math.log(Math.max(raw, 0.001)) / Math.LN10));
