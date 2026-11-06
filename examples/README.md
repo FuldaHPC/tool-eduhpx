@@ -42,6 +42,11 @@ barriers that HPX itself runs at the start and the end remain as groups.
   answer only confirms it (the button says *Confirmations*); an all-gather carries data in both directions.
 - **On the critical path of a gather or reduce, "action" includes waiting.** It is the time from the arrival of the data at
   a parent until the parent sends its own data, so it also contains the wait for its other children.
-- **A few parcels have no MPI data** (2 % without a matching MPI receive, 0.3 % without a send). They are counted in the
-  title but not drawn. Parcels with several zero-copy chunks, and the small internal messages of barriers and scans, are the
-  most likely to be affected.
+- **Almost every parcel has its MPI messages.** 8 of 64 786 parcels have no matching MPI send (all in runs with 64
+  localities); every MPI receive of a sent message is found. Such parcels are counted in the title but not drawn in the locality
+  and message views; in the tree view they are dashed. The MPI parcelport packs several small parcels to one destination into one
+  MPI message; they then share its MPI times, so adding up the MPI time of all messages counts that message more than once. A
+  large parcel (zero-copy chunks) is several MPI messages.
+- **Clocks.** The offsets between the nodes are measured with a ping-pong at the start and then corrected with the MPI
+  messages themselves (the fastest messages of a pair of nodes must take the same time in both directions); the corrections
+  were between -60 and +60 microseconds. Times of different nodes are good to a few microseconds, not better.

@@ -88,7 +88,9 @@ def clock_correction(run_dir):
         for row in csv.DictReader(fh):
             if row.get("processorname") and row["processrank"] != "":
                 node_of.setdefault(int(row["processrank"]), row["processorname"])
-    return lambda rank: offsets.get(node_of.get(rank), 0.0)
+    off = lambda rank: offsets.get(node_of.get(rank), 0.0)
+    off.node_of = node_of
+    return off
 
 
 def read_parcel_log(run_dir, off=lambda rank: 0.0):
@@ -141,6 +143,44 @@ def read_edumpi(path, off=lambda rank: 0.0):
     return isend, irecv, isend_done
 
 
+def refine_clock(isend, irecv, clock_off, node_of, min_samples=20, max_us=100.0):
+    """The offsets measured with a ping-pong are good to a few tens of microseconds, which is more than the time a small
+    message needs. EduMPI records every send and every receive, and MPI does not overtake on one pair, so the k-th send of
+    (src, dst, size) is the k-th receive of it. The fastest messages (1 %) of a pair of nodes show what the clocks are off by:
+    if a -> b is faster than b -> a, the clock of b runs ahead by half the difference. Returns a new off(rank)."""
+    low = {}
+    samples = collections.defaultdict(list)
+    for key, sends in isend.items():
+        recvs = irecv.get(key)
+        if not recvs or len(recvs) != len(sends):
+            continue
+        a, b = node_of.get(key[0]), node_of.get(key[1])
+        if a is None or b is None or a == b:
+            continue
+        for (t_s, _d1), (t_r, _d2) in zip(sends, recvs):
+            samples[(a, b)].append(t_r - t_s)
+    for k, v in samples.items():
+        if len(v) >= min_samples:
+            v.sort()
+            low[k] = v[len(v) // 100]                 # the fastest ones: a busy receiver delays most of the others
+    delta = {}                                   # (a, b) -> how much later the clock of b shows the same moment than the clock of a
+    for (a, b), q in low.items():
+        if (b, a) in low and abs(q - low[(b, a)]) / 2.0 <= max_us:      # the ping-pong is better than that: a larger value is not a clock error
+            delta[(a, b)] = (q - low[(b, a)]) / 2.0
+    nodes = sorted({n for ab in delta for n in ab})
+    if len(nodes) < 2:
+        return clock_off, {}
+    e = {n: 0.0 for n in nodes}
+    for _ in range(500):
+        for b in nodes[1:]:
+            terms = [(e[a] + d, 1.0) for (a, bb), d in delta.items() if bb == b]
+            if terms:
+                e[b] = sum(t for t, _w in terms) / len(terms)
+    refined = lambda rank: clock_off(rank) - e.get(node_of.get(rank), 0.0)
+    refined.node_of = node_of
+    return refined, e
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir")
@@ -153,6 +193,13 @@ def main():
     args = ap.parse_args()
 
     clock_off = clock_correction(args.run_dir)
+    node_of = getattr(clock_off, "node_of", {})
+    if node_of:
+        pre_send, pre_recv, _done = read_edumpi(args.run_dir + "/edumpi_rows.csv", clock_off)
+        clock_off, residual = refine_clock(pre_send, pre_recv, clock_off, node_of)
+        if residual:
+            print("clock offsets refined with the MPI messages (us, per node): " +
+                  ", ".join("%s %+.0f" % (n, v) for n, v in sorted(residual.items())), file=sys.stderr)
     if glob.glob(args.run_dir + "/parcels.loc*.csv"):
         logged_locs, window, sends, recvs, creates, dones = read_parcel_log(args.run_dir, clock_off)
         offset = {l: 0 for l in logged_locs}
@@ -222,7 +269,7 @@ def main():
                 continue
             chosen.append(c)
             total += c["size"]
-            if total > size:
+            if total > size + 8192:      # the message that carries the small part of the parcel and the table of the chunks is a few KiB
                 return None
             if total >= size - 1024:
                 for x in chosen:
@@ -231,6 +278,8 @@ def main():
         return None
 
     messages = []
+    late = []
+    alone = []           # parcels without an MPI message of their own: perhaps sent together with others
     unmatched_mpi = chunked = 0
     for p in sorted((p for p in sends.values() if lo <= p["tracy_send_us"] <= hi), key=lambda p: p["tracy_send_us"]):
         rec = dict(p)
@@ -264,6 +313,7 @@ def main():
                 is_chunk = True
         if sc is None:
             unmatched_mpi += 1
+            alone.append((rec, pair, size))
         else:
             rec["mpi_send_end_us"] = sc["end"]
             rec["mpi_isend_us"] = sc["dur"]
@@ -296,7 +346,67 @@ def main():
                 if rc is not None:
                     rec["mpi_recv_end_us"] = rc["end"]
                     rec["mpi_irecv_us"] = rc["dur"]
+                else:
+                    late.append((rec, pair, sc["size"], sc["end"] - sc["dur"], sc["end"]))
         messages.append(rec)
+
+    # Parcels that HPX sends together: the MPI parcelport packs several small parcels of one destination into one MPI message
+    # (two parcels: the sum of their sizes + header_bytes - 11, seen in the runs; more parcels: 11 less for each further one, a guess).
+    # Neighbouring parcels of a pair, sent within 200 us, whose sizes add up to an unused MPI send share that send.
+    alone.sort(key=lambda x: (x[1], x[0]["tracy_send_us"]))
+    i = 0
+    while i < len(alone):
+        done = False
+        for n in range(2, 41):
+            group = alone[i:i + n]
+            if len(group) < n or group[-1][1] != group[0][1]:
+                break
+            if group[-1][0]["tracy_send_us"] - group[0][0]["tracy_send_us"] > 200:
+                break
+            pair = group[0][1]
+            target = sum(g[2] for g in group) + args.header_bytes - 11 * (n - 1)
+            lower = min(g[0].get("hpx_create_us", g[0]["tracy_send_us"] - 5000) for g in group) - slack_us
+            upper = max(g[0]["tracy_send_us"] for g in group) + after_us
+            sc = take(send_pool.get(pair, []), lambda sz, t=target: sz == t, lower, upper)
+            if sc is None:
+                continue
+            unmatched_mpi -= n
+            for g in group:
+                g[0]["mpi_send_end_us"] = sc["end"]
+                g[0]["mpi_isend_us"] = sc["dur"]
+                g[0]["mpi_together"] = n
+            recs = [g[0] for g in group if "tracy_recv_us" in g[0]]
+            if recs:
+                late.append((recs, pair, target, sc["end"] - sc["dur"], sc["end"]))     # one receive for all of them
+            i += n
+            done = True
+            break
+        if not done:
+            i += 1
+
+    # Second pass for small parcels whose receive was not found in the narrow window above (HPX noticed the message before
+    # the MPI receive was stamped as complete, e.g. clocks of two nodes a few microseconds apart). EduMPI records every
+    # receive, so the unused receives of the pair with the right size are the ones that are missing: the earliest one
+    # that ends after the send call started (not earlier than the call minus the slack, not later than max_late_us after it).
+    max_late_us = 5000.0
+    relaxed_us = 300.0
+    for rec, pair, want, call_start, send_end in late:
+        best = None
+        for rc in recv_pool.get(pair, []):
+            if rc["used"] or rc["size"] != want or rc["end"] < call_start - slack_us or rc["end"] > send_end + max_late_us:
+                continue
+            best = rc
+            break
+        if best is None:
+            # clocks of two nodes can be off by more than the slack: take the closest unused receive of the pair and size
+            near = [rc for rc in recv_pool.get(pair, []) if not rc["used"] and rc["size"] == want and abs(rc["end"] - send_end) <= relaxed_us]
+            if near:
+                best = min(near, key=lambda rc: abs(rc["end"] - send_end))
+        if best is not None:
+            best["used"] = True
+            for r in (rec if isinstance(rec, list) else [rec]):
+                r["mpi_recv_end_us"] = best["end"]
+                r["mpi_irecv_us"] = best["dur"]
 
     messages.sort(key=lambda m: m.get("mpi_send_end_us", m["tracy_send_us"]))
 

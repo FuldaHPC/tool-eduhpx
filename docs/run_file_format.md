@@ -22,5 +22,5 @@ Columns are found by name, their order does not matter, unknown columns are igno
 | `hpx_recv` | HPX has the parcel (receive event) |
 | `hpx_done` | the action finished |
 
-All times: microseconds since the epoch on the clock of the first node (nodes already corrected), `-1` or empty = unknown.
+All times: microseconds since the epoch on the clock of the first node (nodes already corrected: the offsets of the ping-pong refined with the fastest MPI messages of each pair of nodes), `-1` or empty = unknown.
 A message without `mpi_send_end` or `mpi_recv_end` is counted but not drawn.
