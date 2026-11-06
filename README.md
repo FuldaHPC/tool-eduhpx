@@ -20,7 +20,7 @@ In [HPX](https://github.com/STEllAR-GROUP/hpx) you do not write sends and receiv
 sends it for you, over TCP, LCI or MPI. That is convenient, but when a program gets slow, it is hard to say whether the time is
 lost in HPX (waiting, scheduling, preparing the parcel) or in the transport below it (the MPI send, the receive).
 
-[HPX's Tracy integration](https://v4xsh.dev/blog/gsoc-2026-hpx-tracy/) (Google Summer of Code 2026) shows tasks and threads, but not (yet) the parcels between localities. EduMPI shows the MPI messages,
+[HPX's Tracy integration](https://v4xsh.dev/blog/gsoc-2026-hpx-tracy/) (Google Summer of Code 2026) shows tasks, threads and the parcels of each locality, but not the MPI messages below them. EduMPI shows the MPI messages,
 but knows nothing about parcels. **EduHPX puts both on one timeline**: for every parcel you see what HPX did and what MPI did.
 
 ## Download
