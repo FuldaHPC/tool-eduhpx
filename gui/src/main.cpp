@@ -102,6 +102,8 @@ int main(int argc, char *argv[])
             QMetaObject::invokeMethod(root, "showStartPage");   // test: back to the start page after a run was loaded
         if (qEnvironmentVariable("EDUHPX_CRITICAL") == QLatin1String("1"))
             root->setProperty("criticalOn", true);    // preview with the critical path button on
+        if (!qEnvironmentVariable("EDUHPX_ARROWS").isEmpty())
+            root->setProperty("arrowFilter", qEnvironmentVariable("EDUHPX_ARROWS"));   // preview with the Data / Requests filter
         // the views are named after the positional arguments that follow the file
         QStringList specs = args.mid(1);
         wait(500);

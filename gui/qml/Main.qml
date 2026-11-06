@@ -73,12 +73,15 @@ ApplicationWindow {
     property var laneInfo: []
     property var laneMsgs: []
     property int laneHover: -1
+    property real emptyCall: 244         // size of a call without a value (the smallest call of the run)
+    property real emptyAnswer: 154       // size of an answer without a value (the smallest answer of the run)
     property real scrollY: 0            // vertical scrolling of the locality and message views
     property real contentH: 0           // height the current view would need
     function scrollBy(dy, viewH) {
         scrollY = Math.max(0, Math.min(scrollY + dy, Math.max(contentH - viewH, 0)));
     }
     property string arrowFilter: "all"   // all | data | requests: which arrows the lane view draws
+    property bool ackOnly: false         // the small messages are answers that follow the data (a set), not requests that precede it
     property bool hasDataClass: false    // the group has large (data) and small (request) messages
     // broadcast model: who asked whom (tree) and the critical path
     property bool hasTree: false
@@ -228,11 +231,17 @@ ApplicationWindow {
 
     function build() {
         const byKey = {};
+        const lostByKey = {};
         let skippedCount = 0;
         for (let i = 0; i < run.messages.length; ++i) {
             const m = run.messages[i];
             if (m.mpi_send_end_us === undefined || m.mpi_recv_end_us === undefined) {
                 ++skippedCount;
+                if (m.group_kind !== undefined && m.group !== undefined)       // kept for the tree: its parcel is known, only the MPI message is not
+                    (lostByKey[m.group_kind + "#" + m.group] = lostByKey[m.group_kind + "#" + m.group] || []).push(
+                        {src: m.src, dst: m.dst, action: m.action || "", tc: m.hpx_create_us !== undefined ? m.hpx_create_us : -1,
+                         t0: m.mpi_send_end_us !== undefined ? m.mpi_send_end_us : -1,
+                         tr: m.tracy_recv_us !== undefined ? m.tracy_recv_us : -1, td: m.hpx_done_us !== undefined ? m.hpx_done_us : -1});
                 continue;
             }
             const t0 = m.mpi_send_end_us, t1 = m.mpi_recv_end_us;
@@ -292,7 +301,7 @@ ApplicationWindow {
                 }
             }
             rws.sort((a, b) => (a.tc >= 0 ? a.tc : a.t0s) - (b.tc >= 0 ? b.tc : b.t0s));
-            list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end});
+            list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end, lost: lostByKey[key] || []});
             total[rws[0].kind] = (total[rws[0].kind] || 0) + 1;
         }
         list.sort((a, b) => a.start - b.start);
@@ -304,6 +313,16 @@ ApplicationWindow {
                 bytes += r.size;
                 ++parcels;
             }
+        let ea = Infinity, ec = Infinity;
+        for (const g of list)
+            for (const r of g.rows) {
+                if (/set_value_action/.test(r.action))
+                    ea = Math.min(ea, r.size);
+                else if (/communication_(get|set)_direct_action/.test(r.action))
+                    ec = Math.min(ec, r.size);
+            }
+        hpxWindow.emptyCall = ec < Infinity ? ec : 244;
+        hpxWindow.emptyAnswer = ea < Infinity ? ea : 154;
         hpxWindow.runBytes = bytes;
         hpxWindow.runParcels = parcels;
         hpxWindow.skipped = skippedCount;
@@ -378,16 +397,29 @@ ApplicationWindow {
             }
         }
         if (nCalls > 0 && nCalls < rows.length) {
-            const dataInCall = nSets * 2 > nCalls;
+            // Data is what carries a payload: the call of a set, the answer of a get, and the answer of a set that is
+            // more than the empty answer (all-gather sends the gathered result back that way). The rest are requests.
+            const callType = {};
+            for (const r of rows)
+                if (r.isCall)
+                    callType[r.src + ">" + r.dst] = /communication_set_direct_action/.test(r.action) ? "set" : "get";
+            const setMajority = nSets * 2 > nCalls;
             dataOnly = true;
             hasDataClass = true;
-            for (const r of rows)
-                r.big = dataInCall ? r.isCall : !r.isCall;
+            for (const r of rows) {
+                if (r.isCall) {
+                    r.big = callType[r.src + ">" + r.dst] === "set" || r.size > emptyCall + 100;   // a get that carries data (all-gather)
+                } else {
+                    const ct = callType[r.dst + ">" + r.src] || (setMajority ? "set" : "get");
+                    r.big = ct === "get" || r.size > emptyAnswer + 32;
+                }
+            }
         } else {
             hasDataClass = dataOnly;
             for (const r of rows)
                 r.big = !dataOnly || r.size >= maxSize / 2;
         }
+        ackOnly = hasDataClass && !rows.some(r => !r.big && r.isCall);
         const to = {};
         const all = {};
         for (const r of rows) {
@@ -672,10 +704,20 @@ ApplicationWindow {
             hasParent[c] = true;
             let data = up ? (f.call || f.answer) : (f.answer || f.call);
             if (up && !f.call && f.answer) {
-                // the data parcel has no MPI message: it arrived before the parent answered, so the time of the answer
-                // stands in for its arrival (marked as missing)
-                const a = f.answer, t = a.tc >= 0 ? a.tc : a.t0s;
-                data = {src: c, dst: p, size: 0, tc: t, t0s: t, t0: t, t1: t, tr: t, td: t, ts: -1, rq: t, rs: t,
+                // the data parcel has no MPI message: it is known from the parcel log, its arrival is the later of the
+                // end of the send call and the HPX receive; without it the answer of the parent stands in
+                const a = f.answer;
+                const lp = (g.lost || []).find(x => x.src === c && x.dst === p && callRe.test(x.action));
+                let t1 = a.tc >= 0 ? a.tc : a.t0s, tc = t1, t0s = t1, t0 = t1, tr = t1, td = t1;
+                if (lp) {
+                    t0 = lp.t0 >= 0 ? lp.t0 : (lp.tc >= 0 ? lp.tc : t1);
+                    tc = lp.tc >= 0 ? Math.min(lp.tc, t0) : t0;
+                    t0s = t0;
+                    t1 = Math.max(t0, lp.tr);
+                    tr = t1;
+                    td = Math.max(lp.td, tr);
+                }
+                data = {src: c, dst: p, size: 0, tc: tc, t0s: t0s, t0: t0, t1: t1, tr: tr, td: td, ts: -1, rq: t1, rs: t1,
                         action: "", chunk: false, exact: false, tw: -1, kind: a.kind, idx: a.idx, missing: true};
             }
             edges.push({p: p, c: c, data: data, req: up ? f.answer : f.call, up: up});
@@ -803,6 +845,12 @@ ApplicationWindow {
             return "Hover an edge: when the child asked, what it waited for, what HPX did and how long MPI took.";
         const d = e.data, q = e.req;
         const we = waitEnd(d);
+        if (e.up)                                             // the data goes up in the call, the answer only confirms it
+            return "L#" + e.c + " → L#" + e.p + ":  "
+                + (d.tc >= 0 && we > d.tc ? "waited " + fmtUs(we - d.tc) + " for its children,  " : "")
+                + "HPX prepared " + fmtUs(d.t0s - we) + ",  MPI " + fmtUs(Math.max(d.t0, d.t1, d.rq) - d.t0s)
+                + ";  data arrived at +" + fmtUs(d.t1 - treeStart)
+                + (q ? ";  confirmation of the parent at +" + fmtUs(q.tr - treeStart) : "");
         return "L#" + e.p + " → L#" + e.c + ":  "
             + (q ? "asked at +" + fmtUs(q.tc - treeStart) + " (request arrived after " + fmtUs(q.tr - q.tc) + "),  " : "")
             + (d.tc >= 0 && we > d.tc ? "waited " + fmtUs(we - d.tc) + " for the data of its parent,  " : "")
@@ -1111,7 +1159,7 @@ ApplicationWindow {
             Item { Layout.preferredWidth: 18 }
             Label { color: "#cccccc"; text: "Arrows:"; visible: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass }
             Repeater {
-                model: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass ? [["all", "All"], ["data", "Data"], ["requests", "Requests"]] : []
+                model: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass ? [["all", "All"], ["data", "Data"], ["requests", hpxWindow.ackOnly ? "Confirmations" : "Requests"]] : []
                 delegate: Button {
                     required property var modelData
                     text: modelData[1]
@@ -1713,7 +1761,16 @@ ApplicationWindow {
                 visible: (hpxWindow.viewMode === "locality" || hpxWindow.viewMode === "message") && hpxWindow.contentH > parent.height + 1
                 policy: ScrollBar.AlwaysOn
                 size: parent.height / Math.max(hpxWindow.contentH, 1)
-                position: hpxWindow.contentH > 0 ? hpxWindow.scrollY / hpxWindow.contentH : 0
+                // not bound to scrollY (that would be a binding loop with the handler below): synced by hand
+                function sync() {
+                    if (!pressed)
+                        position = hpxWindow.contentH > 0 ? hpxWindow.scrollY / hpxWindow.contentH : 0;
+                }
+                Connections {
+                    target: hpxWindow
+                    function onScrollYChanged() { vbar.sync(); }
+                    function onContentHChanged() { vbar.sync(); }
+                }
                 onPositionChanged: {
                     if (pressed) {
                         hpxWindow.scrollY = Math.max(0, Math.min(position * hpxWindow.contentH, hpxWindow.contentH - parent.height));
