@@ -10,7 +10,7 @@ on:
 
 jobs:
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     env:
       # empty if the secrets are not set: then the app is only signed ad hoc, see .github/macos/README.md
