@@ -73,6 +73,11 @@ ApplicationWindow {
     property var laneInfo: []
     property var laneMsgs: []
     property int laneHover: -1
+    property real scrollY: 0            // vertical scrolling of the locality and message views
+    property real contentH: 0           // height the current view would need
+    function scrollBy(dy, viewH) {
+        scrollY = Math.max(0, Math.min(scrollY + dy, Math.max(contentH - viewH, 0)));
+    }
     property string arrowFilter: "all"   // all | data | requests: which arrows the lane view draws
     property bool hasDataClass: false    // the group has large (data) and small (request) messages
     // broadcast model: who asked whom (tree) and the critical path
@@ -325,6 +330,7 @@ ApplicationWindow {
         const g = groups[current];
         laneHover = -1;
         hoverIndex = -1;
+        scrollY = 0;
         rows = g.rows;
         const dur = Math.max(g.end - g.start, 1);
         viewStart = g.start - dur * 0.03;
@@ -664,7 +670,14 @@ ApplicationWindow {
             if (hasParent[c])
                 return;                                      // a node with two parents: not a tree
             hasParent[c] = true;
-            const data = up ? (f.call || f.answer) : (f.answer || f.call);
+            let data = up ? (f.call || f.answer) : (f.answer || f.call);
+            if (up && !f.call && f.answer) {
+                // the data parcel has no MPI message: it arrived before the parent answered, so the time of the answer
+                // stands in for its arrival (marked as missing)
+                const a = f.answer, t = a.tc >= 0 ? a.tc : a.t0s;
+                data = {src: c, dst: p, size: 0, tc: t, t0s: t, t0: t, t1: t, tr: t, td: t, ts: -1, rq: t, rs: t,
+                        action: "", chunk: false, exact: false, tw: -1, kind: a.kind, idx: a.idx, missing: true};
+            }
             edges.push({p: p, c: c, data: data, req: up ? f.answer : f.call, up: up});
             (children[p] = children[p] || []).push(c);
             parentRow[c] = data;
@@ -799,7 +812,7 @@ ApplicationWindow {
 
     function infoText(r) {
         if (!r)
-            return "Move the mouse over a piece of work or an arrow. Wheel zooms, drag moves.";
+            return "Move the mouse over a piece of work or an arrow. Wheel zooms (scrolls when there are many rows; Ctrl + wheel zooms), drag moves.";
         return "L#" + r.src + " to L#" + r.dst + ", " + fmtSize(r.size) + ":  "
             + (r.tc >= 0 ? (waitEnd(r) > r.tc ? "waited " + fmtUs(waitEnd(r) - r.tc) + " for the data of its parent,  " : "")
                            + "HPX prepares " + fmtUs(r.t0s - waitEnd(r)) + ",  " : "")
@@ -1140,8 +1153,10 @@ ApplicationWindow {
                     for (const l of ls)
                         sum += l.tracks;
                     const avail = height - topMargin - 6 - ls.length * lanePad;
-                    trackH = Math.max(3, Math.min(20, avail / Math.max(sum, 1)));
-                    let y = topMargin;
+                    trackH = Math.max(9, Math.min(20, avail / Math.max(sum, 1)));
+                    hpxWindow.contentH = topMargin + 6 + sum * trackH + ls.length * lanePad;
+                    hpxWindow.scrollY = Math.max(0, Math.min(hpxWindow.scrollY, Math.max(hpxWindow.contentH - height, 0)));
+                    let y = topMargin - hpxWindow.scrollY;
                     for (const l of ls) {
                         l.y0 = y;
                         l.h = l.tracks * trackH + lanePad;
@@ -1218,7 +1233,6 @@ ApplicationWindow {
                     for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step; t + origin <= hpxWindow.viewEnd && ticks < 40; t += step, ++ticks) {
                         const x = Math.round(xOf(t + origin)) + 0.5;
                         ctx.beginPath(); ctx.moveTo(x, topMargin - 4); ctx.lineTo(x, height); ctx.stroke();
-                        ctx.fillText(hpxWindow.fmtUs(t), x + 3, 13);
                     }
 
                     // what each locality does: the send on the sender, the receive on the receiver
@@ -1291,6 +1305,13 @@ ApplicationWindow {
                         ctx.strokeRect(xOf(m.pre.a), yOf(m.pre) - bh / 2, Math.max(xOf(m.pre.b) - xOf(m.pre.a), 2), bh);
                         ctx.strokeRect(xOf(m.rcv.a), yOf(m.rcv) - bh / 2, Math.max(xOf(m.rcv.b) - xOf(m.rcv.a), 3), bh);
                     }
+                    // the time axis stays on top while the lanes scroll under it
+                    ctx.fillStyle = "#2b2b2b";
+                    ctx.fillRect(0, 0, width, topMargin - 4);
+                    ctx.font = "11px sans-serif";
+                    ctx.fillStyle = "#999999";
+                    for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step, n = 0; t + origin <= hpxWindow.viewEnd && n < 40; t += step, ++n)
+                        ctx.fillText(hpxWindow.fmtUs(t), Math.round(xOf(t + origin)) + 3.5, 13);
                 }
 
                 MouseArea {
@@ -1307,6 +1328,11 @@ ApplicationWindow {
                     }
                     onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
                     onWheel: (w) => {
+                        if (hpxWindow.contentH > lanes.height && !(w.modifiers & Qt.ControlModifier)) {    // too many lanes: scroll (Ctrl + wheel zooms)
+                            hpxWindow.scrollBy(-w.angleDelta.y / 2, lanes.height);
+                            lanes.requestPaint();
+                            return;
+                        }
                         const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
                         const tc = lanes.tOf(w.x);
                         hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
@@ -1509,7 +1535,7 @@ ApplicationWindow {
                 readonly property int rightMargin: 12
 
                 function rowHeight() {
-                    return Math.max(4, Math.min(34, (height - topMargin - 6) / Math.max(hpxWindow.rows.length, 1)));
+                    return Math.max(12, Math.min(34, (height - topMargin - 6) / Math.max(hpxWindow.rows.length, 1)));
                 }
                 function xOf(t) {
                     return leftMargin + (t - hpxWindow.viewStart) / (hpxWindow.viewEnd - hpxWindow.viewStart) * (width - leftMargin - rightMargin);
@@ -1527,6 +1553,8 @@ ApplicationWindow {
                         return;
                     const rows = hpxWindow.rows;
                     const rh = rowHeight();
+                    hpxWindow.contentH = topMargin + 6 + rows.length * rh;
+                    hpxWindow.scrollY = Math.max(0, Math.min(hpxWindow.scrollY, Math.max(hpxWindow.contentH - height, 0)));
                     const origin = hpxWindow.currentGroup ? hpxWindow.currentGroup.start : 0;
                     const span = hpxWindow.viewEnd - hpxWindow.viewStart;
                     const raw = span / 8;
@@ -1541,13 +1569,14 @@ ApplicationWindow {
                     for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step; t + origin <= hpxWindow.viewEnd && ticks < 40; t += step, ++ticks) {
                         const x = Math.round(xOf(t + origin)) + 0.5;
                         ctx.beginPath(); ctx.moveTo(x, topMargin - 4); ctx.lineTo(x, height); ctx.stroke();
-                        ctx.fillText(hpxWindow.fmtUs(t), x + 3, 13);
                     }
 
                     const bar = Math.max(rh * 0.6, 2);
                     for (let i = 0; i < rows.length; ++i) {
                         const r = rows[i];
-                        const y = topMargin + i * rh, mid = y + rh / 2;
+                        const y = topMargin + i * rh - hpxWindow.scrollY, mid = y + rh / 2;
+                        if (y + rh < topMargin || y > height)
+                            continue;
                         if (i === hpxWindow.hoverIndex) {
                             ctx.fillStyle = "rgba(255,255,255,0.10)";
                             ctx.fillRect(0, y, width, rh);
@@ -1596,6 +1625,12 @@ ApplicationWindow {
                                            Math.max(xOf(Math.max(r.t1, r.tr, r.td)) - xOf(Math.min(r.tc >= 0 ? r.tc : r.t0s, r.t0s)) + 2, 4), bar + 2);
                         }
                     }
+                    ctx.fillStyle = "#2b2b2b";
+                    ctx.fillRect(0, 0, width, topMargin - 4);
+                    ctx.font = "11px sans-serif";
+                    ctx.fillStyle = "#999999";
+                    for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step, n = 0; t + origin <= hpxWindow.viewEnd && n < 40; t += step, ++n)
+                        ctx.fillText(hpxWindow.fmtUs(t), Math.round(xOf(t + origin)) + 3.5, 13);
                 }
 
                 MouseArea {
@@ -1606,6 +1641,11 @@ ApplicationWindow {
                     property real endAt: 0
                     onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
                     onWheel: (w) => {
+                        if (hpxWindow.contentH > waterfall.height && !(w.modifiers & Qt.ControlModifier)) {    // too many rows: scroll (Ctrl + wheel zooms)
+                            hpxWindow.scrollBy(-w.angleDelta.y / 2, waterfall.height);
+                            waterfall.requestPaint();
+                            return;
+                        }
                         const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
                         const tc = waterfall.tOf(w.x);
                         hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
@@ -1616,12 +1656,33 @@ ApplicationWindow {
                             hpxWindow.setView(startAt - dt, startAt - dt + (endAt - startAt));
                             return;
                         }
-                        const i = Math.floor((e.y - waterfall.topMargin) / waterfall.rowHeight());
+                        const i = Math.floor((e.y - waterfall.topMargin + hpxWindow.scrollY) / waterfall.rowHeight());
                         const n = i >= 0 && i < hpxWindow.rows.length ? i : -1;
                         if (n !== hpxWindow.hoverIndex) {
                             hpxWindow.hoverIndex = n;
                             waterfall.requestPaint();
                         }
+                    }
+                }
+            }
+
+            // vertical scrolling when there are more lanes / messages than fit
+            ScrollBar {
+                id: vbar
+                orientation: Qt.Vertical
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.topMargin: 24
+                visible: (hpxWindow.viewMode === "locality" || hpxWindow.viewMode === "message") && hpxWindow.contentH > parent.height + 1
+                policy: ScrollBar.AlwaysOn
+                size: parent.height / Math.max(hpxWindow.contentH, 1)
+                position: hpxWindow.contentH > 0 ? hpxWindow.scrollY / hpxWindow.contentH : 0
+                onPositionChanged: {
+                    if (pressed) {
+                        hpxWindow.scrollY = Math.max(0, Math.min(position * hpxWindow.contentH, hpxWindow.contentH - parent.height));
+                        lanes.requestPaint();
+                        waterfall.requestPaint();
                     }
                 }
             }
