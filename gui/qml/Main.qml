@@ -812,7 +812,7 @@ ApplicationWindow {
 
     function infoText(r) {
         if (!r)
-            return "Move the mouse over a piece of work or an arrow. Wheel zooms (scrolls when there are many rows; Ctrl + wheel zooms), drag moves.";
+            return "Move the mouse over a piece of work or an arrow. Two fingers scroll, pinch zooms (or Ctrl + wheel), drag moves.";
         return "L#" + r.src + " to L#" + r.dst + ", " + fmtSize(r.size) + ":  "
             + (r.tc >= 0 ? (waitEnd(r) > r.tc ? "waited " + fmtUs(waitEnd(r) - r.tc) + " for the data of its parent,  " : "")
                            + "HPX prepares " + fmtUs(r.t0s - waitEnd(r)) + ",  " : "")
@@ -1314,6 +1314,18 @@ ApplicationWindow {
                         ctx.fillText(hpxWindow.fmtUs(t), Math.round(xOf(t + origin)) + 3.5, 13);
                 }
 
+                PinchHandler {
+                    target: null
+                    property real last: 1
+                    onActiveChanged: last = 1
+                    onActiveScaleChanged: {
+                        const f = last / activeScale;
+                        last = activeScale;
+                        const tc = lanes.tOf(centroid.position.x);
+                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * f, tc + (hpxWindow.viewEnd - tc) * f);
+                    }
+                }
+
                 MouseArea {
                     anchors.fill: parent
                     hoverEnabled: true
@@ -1328,14 +1340,20 @@ ApplicationWindow {
                     }
                     onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
                     onWheel: (w) => {
-                        if (hpxWindow.contentH > lanes.height && !(w.modifiers & Qt.ControlModifier)) {    // too many lanes: scroll (Ctrl + wheel zooms)
-                            hpxWindow.scrollBy(-w.angleDelta.y / 2, lanes.height);
-                            lanes.requestPaint();
+                        if (w.modifiers & Qt.ControlModifier) {            // Ctrl + wheel zooms the time axis
+                            const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
+                            const tc = lanes.tOf(w.x);
+                            hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
                             return;
                         }
-                        const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
-                        const tc = lanes.tOf(w.x);
-                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                        if (w.angleDelta.x !== 0) {                         // sideways: move in time
+                            const dt = -w.angleDelta.x / 4 / (lanes.width - lanes.leftMargin - lanes.rightMargin) * (hpxWindow.viewEnd - hpxWindow.viewStart);
+                            hpxWindow.setView(hpxWindow.viewStart + dt, hpxWindow.viewEnd + dt);
+                        }
+                        if (w.angleDelta.y !== 0) {                         // up / down: scroll the rows
+                            hpxWindow.scrollBy(-w.angleDelta.y / 2, lanes.height);
+                            lanes.requestPaint();
+                        }
                     }
                     onPositionChanged: (e) => {
                         if (pressed) {
@@ -1633,6 +1651,18 @@ ApplicationWindow {
                         ctx.fillText(hpxWindow.fmtUs(t), Math.round(xOf(t + origin)) + 3.5, 13);
                 }
 
+                PinchHandler {
+                    target: null
+                    property real last: 1
+                    onActiveChanged: last = 1
+                    onActiveScaleChanged: {
+                        const f = last / activeScale;
+                        last = activeScale;
+                        const tc = waterfall.tOf(centroid.position.x);
+                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * f, tc + (hpxWindow.viewEnd - tc) * f);
+                    }
+                }
+
                 MouseArea {
                     anchors.fill: parent
                     hoverEnabled: true
@@ -1641,14 +1671,20 @@ ApplicationWindow {
                     property real endAt: 0
                     onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
                     onWheel: (w) => {
-                        if (hpxWindow.contentH > waterfall.height && !(w.modifiers & Qt.ControlModifier)) {    // too many rows: scroll (Ctrl + wheel zooms)
-                            hpxWindow.scrollBy(-w.angleDelta.y / 2, waterfall.height);
-                            waterfall.requestPaint();
+                        if (w.modifiers & Qt.ControlModifier) {            // Ctrl + wheel zooms the time axis
+                            const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
+                            const tc = waterfall.tOf(w.x);
+                            hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
                             return;
                         }
-                        const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
-                        const tc = waterfall.tOf(w.x);
-                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                        if (w.angleDelta.x !== 0) {                         // sideways: move in time
+                            const dt = -w.angleDelta.x / 4 / (waterfall.width - waterfall.leftMargin - waterfall.rightMargin) * (hpxWindow.viewEnd - hpxWindow.viewStart);
+                            hpxWindow.setView(hpxWindow.viewStart + dt, hpxWindow.viewEnd + dt);
+                        }
+                        if (w.angleDelta.y !== 0) {                         // up / down: scroll the rows
+                            hpxWindow.scrollBy(-w.angleDelta.y / 2, waterfall.height);
+                            waterfall.requestPaint();
+                        }
                     }
                     onPositionChanged: (e) => {
                         if (pressed) {
