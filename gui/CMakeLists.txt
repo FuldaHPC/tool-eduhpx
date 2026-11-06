@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
 
-project(EduHPX VERSION 0.0.1 LANGUAGES CXX)
+project(EduHPX VERSION 0.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,27 +14,30 @@ qt_add_executable(eduhpx
     src/main.cpp
 )
 
-foreach(example flat_broadcast_16loc_4nodes hierarchical_broadcast_16loc_4nodes mixed_4loc_1node)
-    set_source_files_properties(../examples/${example}.csv PROPERTIES QT_RESOURCE_ALIAS examples/${example}.csv)
+# all example run files are built into the program (File > Examples), with examples/index.json as their list
+file(GLOB EXAMPLE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/../examples/*.csv ${CMAKE_CURRENT_SOURCE_DIR}/../examples/index.json)
+foreach(example ${EXAMPLE_FILES})
+    get_filename_component(example_name ${example} NAME)
+    set_source_files_properties(${example} PROPERTIES QT_RESOURCE_ALIAS examples/${example_name})
 endforeach()
 
 # Main.qml is served at the root of the module, so that it finds the C++ type RunFile of the module
 set_source_files_properties(qml/Main.qml PROPERTIES QT_RESOURCE_ALIAS Main.qml)
+set_source_files_properties(qml/ExampleList.qml PROPERTIES QT_RESOURCE_ALIAS ExampleList.qml)
 
 qt_add_qml_module(eduhpx
     URI EduHPX
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/ExampleList.qml
     SOURCES
         src/run_file.h
         src/run_file.cpp
     RESOURCES
         assets/logo.png
         assets/icon_256.png
-        ../examples/flat_broadcast_16loc_4nodes.csv
-        ../examples/hierarchical_broadcast_16loc_4nodes.csv
-        ../examples/mixed_4loc_1node.csv
+        ${EXAMPLE_FILES}
 )
 
 target_include_directories(eduhpx PRIVATE src)

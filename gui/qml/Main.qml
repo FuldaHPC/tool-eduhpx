@@ -29,12 +29,8 @@ ApplicationWindow {
         Menu {
             title: "File"
             MenuItem { text: "Open run file..."; onTriggered: fileDialog.open() }
-            Menu {
-                title: "Examples"
-                MenuItem { text: "Flat broadcast, 16 localities on 4 nodes"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/flat_broadcast_16loc_4nodes.csv") }
-                MenuItem { text: "Tree broadcast, 16 localities on 4 nodes"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/hierarchical_broadcast_16loc_4nodes.csv") }
-                MenuItem { text: "Mixed traffic, 4 localities"; onTriggered: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/mixed_4loc_1node.csv") }
-            }
+            MenuItem { text: "Start page"; enabled: run.loaded; onTriggered: run.unload() }
+            MenuItem { text: "Examples..."; onTriggered: examplesDialog.open() }
             MenuSeparator { }
             MenuItem { text: "Quit"; onTriggered: Qt.quit() }
         }
@@ -77,15 +73,26 @@ ApplicationWindow {
     property var laneInfo: []
     property var laneMsgs: []
     property int laneHover: -1
+    property real emptyCall: 244         // size of a call without a value (the smallest call of the run)
+    property real emptyAnswer: 154       // size of an answer without a value (the smallest answer of the run)
+    property real scrollY: 0            // vertical scrolling of the locality and message views
+    property real contentH: 0           // height the current view would need
+    function scrollBy(dy, viewH) {
+        scrollY = Math.max(0, Math.min(scrollY + dy, Math.max(contentH - viewH, 0)));
+    }
     property string arrowFilter: "all"   // all | data | requests: which arrows the lane view draws
+    property bool ackOnly: false         // the small messages are answers that follow the data (a set), not requests that precede it
     property bool hasDataClass: false    // the group has large (data) and small (request) messages
     // broadcast model: who asked whom (tree) and the critical path
     property bool hasTree: false
+    property bool treeUp: false          // the data of the tree moves up (reduce, gather) instead of down
     readonly property bool pathOn: hasTree && pathLength > 0
     readonly property bool showPath: pathOn && criticalOn      // summary: the critical path (real time), else all messages added up
     property int pathHops: 0
     property real sumWire: 0        // MPI transfer only: from the end of the send call to the end of the receive
-    readonly property real groupSpan: groups.length > 0 ? groups[current].end - groups[current].start : 0
+    // the group that is shown; null while the list of groups and the index are out of step (a new file, the start page)
+    readonly property var currentGroup: current >= 0 && current < groups.length ? groups[current] : null
+    readonly property real groupSpan: currentGroup ? currentGroup.end - currentGroup.start : 0
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
     property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
@@ -181,6 +188,31 @@ ApplicationWindow {
     function openFile(url) {
         run.load(url);
     }
+    // for the tests: the critical path of every group as JSON (eduhpx with EDUHPX_PATH_REPORT=1 prints it)
+    function pathReport() {
+        const out = [];
+        for (let i = 0; i < groups.length; ++i) {
+            select(i);
+            const base = {kind: groups[i].kind, k: groups[i].k, messages: rows.length};
+            if (!hasTree) {
+                out.push(Object.assign(base, {tree: false}));
+                continue;
+            }
+            let covered = 0;
+            for (const sg of pathSegs)
+                covered += sg.b - sg.a;
+            const edgeList = treeEdges.map(e => [e.p, e.c, e.data.src, e.data.dst]);
+            out.push(Object.assign(base, {tree: true, up: treeUp, chain: pathChain, hops: pathHops, depth: treeDepth, nodes: treeNodes.length,
+                                          length: pathLength, span: groupSpan, covered: covered, start: pathStart, end: pathEnd,
+                                          parts: {prepare: pathPrepare, mpi: pathMpi, pick: pathPick, parent: pathParent, action: pathAction},
+                                          edges: edgeList, segs: pathSegs.map(x => [x.kind, Math.round(x.a - groups[i].start), Math.round(x.b - groups[i].start)])}));
+        }
+        select(0);
+        return JSON.stringify(out);
+    }
+    function showStartPage() {          // also used by the headless preview
+        run.unload();
+    }
     // for the headless preview (eduhpx --render): show a group / a view
     function showGroup(kind, k) {
         for (let i = 0; i < groups.length; ++i)
@@ -199,11 +231,17 @@ ApplicationWindow {
 
     function build() {
         const byKey = {};
+        const lostByKey = {};
         let skippedCount = 0;
         for (let i = 0; i < run.messages.length; ++i) {
             const m = run.messages[i];
             if (m.mpi_send_end_us === undefined || m.mpi_recv_end_us === undefined) {
                 ++skippedCount;
+                if (m.group_kind !== undefined && m.group !== undefined)       // kept for the tree: its parcel is known, only the MPI message is not
+                    (lostByKey[m.group_kind + "#" + m.group] = lostByKey[m.group_kind + "#" + m.group] || []).push(
+                        {src: m.src, dst: m.dst, size: m.size, action: m.action || "", tc: m.hpx_create_us !== undefined ? m.hpx_create_us : -1,
+                         t0: m.mpi_send_end_us !== undefined ? m.mpi_send_end_us : -1,
+                         tr: m.tracy_recv_us !== undefined ? m.tracy_recv_us : -1, td: m.hpx_done_us !== undefined ? m.hpx_done_us : -1});
                 continue;
             }
             const t0 = m.mpi_send_end_us, t1 = m.mpi_recv_end_us;
@@ -263,7 +301,7 @@ ApplicationWindow {
                 }
             }
             rws.sort((a, b) => (a.tc >= 0 ? a.tc : a.t0s) - (b.tc >= 0 ? b.tc : b.t0s));
-            list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end});
+            list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end, lost: lostByKey[key] || []});
             total[rws[0].kind] = (total[rws[0].kind] || 0) + 1;
         }
         list.sort((a, b) => a.start - b.start);
@@ -275,6 +313,16 @@ ApplicationWindow {
                 bytes += r.size;
                 ++parcels;
             }
+        let ea = Infinity, ec = Infinity;
+        for (const g of list)
+            for (const r of g.rows) {
+                if (/set_value_action/.test(r.action))
+                    ea = Math.min(ea, r.size);
+                else if (/communication_(get|set)_direct_action/.test(r.action))
+                    ec = Math.min(ec, r.size);
+            }
+        hpxWindow.emptyCall = ec < Infinity ? ec : 244;
+        hpxWindow.emptyAnswer = ea < Infinity ? ea : 154;
         hpxWindow.runBytes = bytes;
         hpxWindow.runParcels = parcels;
         hpxWindow.skipped = skippedCount;
@@ -284,7 +332,7 @@ ApplicationWindow {
 
     // broadcast: the action of a small request is the time it waits at the parent until the reply is created
     function isRequestWait(r) {
-        return groups.length > 0 && groups[current].kind === "broadcast" && !r.big;
+        return currentGroup !== null && currentGroup.kind === "broadcast" && !r.big;
     }
 
     function select(i) {
@@ -301,6 +349,7 @@ ApplicationWindow {
         const g = groups[current];
         laneHover = -1;
         hoverIndex = -1;
+        scrollY = 0;
         rows = g.rows;
         const dur = Math.max(g.end - g.start, 1);
         viewStart = g.start - dur * 0.03;
@@ -334,16 +383,49 @@ ApplicationWindow {
             maxSize = Math.max(maxSize, r.size);
             minSize = Math.min(minSize, r.size);
         }
-        const dataOnly = maxSize > 2 * minSize;
-        hasDataClass = dataOnly;
-        for (const r of rows)
-            r.big = !dataOnly || r.size >= maxSize / 2;
+        let dataOnly = maxSize > 2 * minSize;
+        // A collective is calls (the actions get_direct / set_direct of a locality to its parent) and answers. That tells
+        // the requests from the data whatever the sizes are: for a get the data is in the answer, for a set in the call.
+        const callRe = /communication_(get|set)_direct_action/;
+        let nCalls = 0, nSets = 0;
+        for (const r of rows) {
+            r.isCall = callRe.test(r.action);
+            if (r.isCall) {
+                ++nCalls;
+                if (/communication_set_direct_action/.test(r.action))
+                    ++nSets;
+            }
+        }
+        if (nCalls > 0 && nCalls < rows.length) {
+            // Data is what carries a payload: the call of a set, the answer of a get, and the answer of a set that is
+            // more than the empty answer (all-gather sends the gathered result back that way). The rest are requests.
+            const callType = {};
+            for (const r of rows)
+                if (r.isCall)
+                    callType[r.src + ">" + r.dst] = /communication_set_direct_action/.test(r.action) ? "set" : "get";
+            const setMajority = nSets * 2 > nCalls;
+            dataOnly = true;
+            hasDataClass = true;
+            for (const r of rows) {
+                if (r.isCall) {
+                    r.big = callType[r.src + ">" + r.dst] === "set" || r.size > emptyCall + 100;   // a get that carries data (all-gather)
+                } else {
+                    const ct = callType[r.dst + ">" + r.src] || (setMajority ? "set" : "get");
+                    r.big = ct === "get" || r.size > emptyAnswer + 32;
+                }
+            }
+        } else {
+            hasDataClass = dataOnly;
+            for (const r of rows)
+                r.big = !dataOnly || r.size >= maxSize / 2;
+        }
+        ackOnly = hasDataClass && !rows.some(r => !r.big && r.isCall);
         const to = {};
         const all = {};
         for (const r of rows) {
             all[r.src] = true;
             all[r.dst] = true;
-            if (dataOnly && r.size < maxSize / 2)
+            if (dataOnly && !r.big)
                 continue;
             (to[r.src] = to[r.src] || {})[r.dst] = true;
         }
@@ -419,6 +501,7 @@ ApplicationWindow {
         for (const r of rows)
             r.crit = false;
         hasTree = false;
+        treeUp = false;
         treeEdges = [];
         treeNodes = [];
         treeNodeMap = ({});
@@ -428,8 +511,23 @@ ApplicationWindow {
         pathChain = "";
         treeHover = -1;
         const g = groups[current];
-        if (!g || g.kind !== "broadcast" || !hasDataClass)
+        if (g && g.kind !== "broadcast" && g.kind !== "burst" && g.kind !== "barrier") {
+            buildGenericTree(g);
             return;
+        }
+        if (!g || g.kind !== "broadcast")
+            return;                                          // burst, barrier: no tree
+        // A broadcast with large data messages has its own model (it knows the wait for the data of the parent). The
+        // broadcast inside an all-reduce carries small values only: it is built like the other collectives.
+        let maxSz = 0, minSz = Infinity;
+        for (const r of rows) {
+            maxSz = Math.max(maxSz, r.size);
+            minSz = Math.min(minSz, r.size);
+        }
+        if (!hasDataClass || maxSz <= 2 * minSz) {
+            buildGenericTree(g);
+            return;
+        }
         const into = {};
         const asks = {};
         const children = {};
@@ -495,7 +593,7 @@ ApplicationWindow {
                     last = r;
                 }
             }
-        const segs = [];
+        let segs = [];
         const hops = [];
         const add = (kind, a, b, row) => {
             row.crit = true;
@@ -510,23 +608,24 @@ ApplicationWindow {
                 add("pick", cur.t1, cur.tr, cur);
                 isFinal = false;
             }
-            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1, cur.rq), cur);
+            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1), cur);
             const we = waitEnd(cur);
             add("prepare", we, cur.t0s, cur);
             const up = into[cur.src];
-            if (up && cur.tw > cur.tc) {
+            if (up) {                                         // a forwarding locality sends on what it received, whenever HPX created the parcel
                 cur = up;
                 continue;
             }
             const rq = asks[cur.dst];
             if (rq) {
-                add("parent", rq.tr, Math.max(cur.tc, rq.tr), rq);
+                add("parent", Math.max(rq.tr, rq.t1), Math.max(cur.tc, rq.tr, rq.t1), rq);
                 add("pick", rq.t1, rq.tr, rq);
-                add("mpi", rq.t0s, Math.max(rq.t0, rq.t1, rq.rq), rq);
+                add("mpi", rq.t0s, Math.max(rq.t0, rq.t1), rq);
                 add("prepare", waitEnd(rq), rq.t0s, rq);
             }
             break;
         }
+        segs = clipSegments(segs);
         let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0, par = 0;
         for (const sg of segs) {
             a0 = Math.min(a0, sg.a);
@@ -552,11 +651,246 @@ ApplicationWindow {
         pathChain = names.map(l => "L#" + l).join(" → ");
     }
 
+    // Tree of any other collective (reduce, gather, scatter, ...; also the star of a flat one). Every edge of the tree
+    // carries two messages, one each way; the larger one is the data and its direction says whether the data moves up
+    // (reduce, gather) or down (scatter ...) the tree. The critical path is the chain that finishes the group.
+    function buildGenericTree(g) {
+        // Every edge of the tree has a call of the child to its parent (the action get_direct or set_direct) and the
+        // answer of the parent. For a get the data comes back in the answer (down the tree); a set carries the data in
+        // the call (up the tree). Without such an action the larger message of the pair is taken as the data.
+        const callRe = /communication_(get|set)_direct_action/;
+        const pairs = {};
+        for (const r of rows) {
+            const key = Math.min(r.src, r.dst) + "-" + Math.max(r.src, r.dst);
+            (pairs[key] = pairs[key] || []).push(r);
+        }
+        // parcels without an MPI message are known from the parcel log; they take part in the tree where no row exists
+        // for their direction (their times: end of the send call, HPX receive)
+        for (const lp of (g.lost || [])) {
+            const key = Math.min(lp.src, lp.dst) + "-" + Math.max(lp.src, lp.dst);
+            const list = pairs[key] = pairs[key] || [];
+            if (list.some(m => m.src === lp.src && m.dst === lp.dst))
+                continue;
+            const t0 = lp.t0 >= 0 ? lp.t0 : (lp.tc >= 0 ? lp.tc : lp.tr);
+            const t1 = Math.max(t0, lp.tr);
+            if (t0 < 0)
+                continue;
+            list.push({src: lp.src, dst: lp.dst, size: lp.size, tc: lp.tc >= 0 ? Math.min(lp.tc, t0) : t0, t0s: t0, t0: t0, t1: t1,
+                       tr: t1, td: lp.td >= 0 ? Math.max(lp.td, t1) : -1, ts: -1, rq: t1, rs: t1, action: lp.action, chunk: false,
+                       exact: false, tw: -1, kind: g.kind, idx: g.k, missing: true});
+        }
+        const found = [];                                    // {call, answer, set}
+        const nodes = {};
+        let calls = 0, sets = 0;
+        for (const key of Object.keys(pairs)) {
+            const ms = pairs[key].slice().sort((a, b) => b.size - a.size);
+            let call = ms.find(m => callRe.test(m.action));
+            let isSet, lostCall = false;
+            if (call) {
+                isSet = /communication_set_direct_action/.test(call.action);
+                ++calls;
+            } else {
+                call = ms[ms.length - 1];                    // no action name: the smaller message is the call
+                isSet = false;
+                lostCall = ms.length === 1;                  // only one message is known: may be an answer whose call is missing
+            }
+            const answer = ms.find(m => m !== call && m.src === call.dst && m.dst === call.src);
+            nodes[call.src] = nodes[call.dst] = true;
+            if (isSet)
+                ++sets;
+            found.push({call: call, answer: answer, set: isSet, lost: lostCall});
+        }
+        const nodeCount = Object.keys(nodes).length;
+        if (nodeCount < 3 || found.length >= nodeCount || nodeCount - found.length > 4)
+            return;                                          // not a tree (or a few of them: the halves of a hierarchical all-to-all)
+        const up = sets * 2 > found.length;                  // the data moves towards the root
+        for (const f of found) {
+            f.p = f.call.dst; f.c = f.call.src;
+            if (calls > 0 && f.lost && !callRe.test(f.call.action)) {
+                f.p = f.call.src; f.c = f.call.dst;          // the lone message is an answer: its call was lost, turn the direction
+                f.answer = f.call;
+                f.call = null;
+            }
+        }
+        const edges = [], children = {}, parentRow = {}, hasParent = {};
+        for (const f of found) {
+            const p = f.p, c = f.c;
+            if (hasParent[c])
+                return;                                      // a node with two parents: not a tree
+            hasParent[c] = true;
+            let data = up ? (f.call || f.answer) : (f.answer || f.call);
+            if (up && !f.call && f.answer) {
+                // the data parcel has no MPI message: it is known from the parcel log, its arrival is the later of the
+                // end of the send call and the HPX receive; without it the answer of the parent stands in
+                const a = f.answer;
+                const lp = (g.lost || []).find(x => x.src === c && x.dst === p && callRe.test(x.action));
+                let t1 = a.tc >= 0 ? a.tc : a.t0s, tc = t1, t0s = t1, t0 = t1, tr = t1, td = t1;
+                if (lp) {
+                    t0 = lp.t0 >= 0 ? lp.t0 : (lp.tc >= 0 ? lp.tc : t1);
+                    tc = lp.tc >= 0 ? Math.min(lp.tc, t0) : t0;
+                    t0s = t0;
+                    t1 = Math.max(t0, lp.tr);
+                    tr = t1;
+                    td = Math.max(lp.td, tr);
+                }
+                data = {src: c, dst: p, size: 0, tc: tc, t0s: t0s, t0: t0, t1: t1, tr: tr, td: td, ts: -1, rq: t1, rs: t1,
+                        action: "", chunk: false, exact: false, tw: -1, kind: a.kind, idx: a.idx, missing: true};
+            }
+            edges.push({p: p, c: c, data: data, req: up ? f.answer : f.call, up: up});
+            (children[p] = children[p] || []).push(c);
+            parentRow[c] = data;
+        }
+        const rootList = Object.keys(nodes).filter(l => !hasParent[l]);
+        if (rootList.length < 1 || rootList.length !== nodeCount - found.length)
+            return;
+        // layout: depth = level, x = position among the leaves; the tree must reach every node from the root
+        const map = {};
+        let leaf = 0, maxDepth = 0;
+        const place = (loc, depth) => {
+            maxDepth = Math.max(maxDepth, depth);
+            const kids = (children[loc] || []).slice().sort((a, b) => a - b);
+            let x;
+            if (kids.length === 0) {
+                x = leaf++;
+            } else {
+                let sum = 0;
+                for (const k of kids)
+                    sum += place(k, depth + 1);
+                x = sum / kids.length;
+            }
+            map[loc] = {loc: loc, depth: depth, x: x, leaf: kids.length === 0};
+            return x;
+        };
+        for (const rt of rootList.map(x => parseInt(x)).sort((a, b) => a - b))
+            place(rt, 0);
+        if (Object.keys(map).length !== nodeCount)
+            return;
+        treeNodeMap = map;
+        treeNodes = Object.keys(map).map(k => map[k]);
+        treeEdges = edges;
+        treeLeaves = Math.max(leaf, 1);
+        treeDepth = maxDepth;
+        treeStart = g.start;
+        treeUp = up;
+        hasTree = true;
+
+        // critical path: from the data message that arrives last, back over what each sender waited for
+        let last = null, lastEnd = -Infinity;
+        for (const e of edges) {
+            if (up && hasParent[e.p])
+                continue;                                    // up: the group is done when a root has the data, not earlier inside the tree
+            const r = e.data, t = Math.max(r.t1, r.tr, r.td);
+            if (t > lastEnd) { lastEnd = t; last = r; }
+        }
+        let segs = [];
+        const hops = [];
+        const add = (kind, a, b, row) => {
+            row.crit = true;
+            if (b > a)
+                segs.push({kind: kind, a: a, b: b});
+        };
+        let cur = last, final = true, guard = 0;
+        while (cur && guard++ < 64) {
+            hops.push(cur);
+            if (final) {
+                add("action", cur.tr, cur.td, cur);
+                add("pick", cur.t1, cur.tr, cur);
+                final = false;
+            }
+            add("mpi", cur.t0s, Math.max(cur.t0, cur.t1), cur);
+            const created = cur.tc >= 0 ? cur.tc : cur.t0s;
+            let from = null;                                  // what the sender had to wait for
+            if (up) {
+                // the data of the children: the last one that arrived before this parcel was created
+                for (const e of edges)
+                    if (e.p === cur.src && e.data.t1 <= created + 20 && (from === null || e.data.t1 > from.t1))
+                        from = e.data;
+                add("prepare", created, cur.t0s, cur);
+                if (from) {
+                    add("pick", from.t1, from.tr, from);
+                    add("action", from.tr, Math.max(created, from.tr), from);    // combining the data of the children
+                }
+            } else {
+                // down: the parcel for the children is created early and waits for the data of the parent
+                from = parentRow[cur.src] || null;
+                if (from && from.dst !== cur.src)
+                    from = null;                              // the answer of the parent is missing (a parcel without MPI data)
+                const edgeOfCur = edges.find(x => x.data === cur);
+                const rqOfCur = edgeOfCur ? edgeOfCur.req : null;
+                // the data cannot be prepared before the parent has its own data, or before the request of the child has arrived
+                add("prepare", Math.max(created, from ? from.tr : (rqOfCur ? rqOfCur.tr : created)), cur.t0s, cur);
+                if (from)
+                    add("pick", from.t1, from.tr, from);
+                else {
+                    // a child of the root: its request and the wait of the request at the root
+                    const rq = rqOfCur;
+                    if (rq) {
+                        add("parent", Math.max(rq.tr, rq.t1), Math.max(created, rq.tr, rq.t1), rq);
+                        add("pick", rq.t1, rq.tr, rq);
+                        add("mpi", rq.t0s, Math.max(rq.t0, rq.t1), rq);
+                        add("prepare", rq.tc >= 0 ? rq.tc : rq.t0s, rq.t0s, rq);
+                    }
+                }
+            }
+            cur = from;
+        }
+        segs = clipSegments(segs);
+        let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0, par = 0;
+        for (const sg of segs) {
+            a0 = Math.min(a0, sg.a);
+            if (sg.kind === "prepare") prep += sg.b - sg.a;
+            else if (sg.kind === "mpi") mpi += sg.b - sg.a;
+            else if (sg.kind === "pick") pick += sg.b - sg.a;
+            else if (sg.kind === "parent") par += sg.b - sg.a;
+            else act += sg.b - sg.a;
+        }
+        pathSegs = segs;
+        pathLength = lastEnd - a0;
+        pathStart = a0 - g.start;
+        pathEnd = lastEnd - g.start;
+        pathPrepare = prep;
+        pathMpi = mpi;
+        pathPick = pick;
+        pathAction = act;
+        pathParent = par;
+        pathHops = hops.length;
+        const names = hops.length > 0 ? [hops[hops.length - 1].src] : [];
+        for (let i = hops.length - 1; i >= 0; --i)
+            names.push(hops[i].dst);
+        pathChain = names.map(l => "L#" + l).join(" → ");
+    }
+
+    // The pieces of the critical path follow each other in time. Where two of them overlap (a large message of which HPX saw
+    // the header before the MPI receive was complete), the later one keeps its time and the earlier one is shortened.
+    function clipSegments(list) {
+        const sorted = list.slice().sort((x, y) => (y.b - x.b) || (y.a - x.a));
+        const out = [];
+        let limit = Infinity;
+        for (const sg of sorted) {
+            const b = Math.min(sg.b, limit);
+            if (b > sg.a) {
+                out.push({kind: sg.kind, a: sg.a, b: b});
+                limit = sg.a;
+            }
+        }
+        return out;
+    }
+
     function treeInfoText(e) {
         if (!e)
             return "Hover an edge: when the child asked, what it waited for, what HPX did and how long MPI took.";
         const d = e.data, q = e.req;
         const we = waitEnd(d);
+        if (d.missing || (q && q.missing))                   // times of the parcel log stand in for the MPI message
+            return "L#" + (e.up ? e.c : e.p) + " → L#" + (e.up ? e.p : e.c) + ":  no MPI message was recorded for "
+                + (d.missing ? "this parcel" : "the request of this edge") + ", its times are those of the HPX parcel log (the MPI time is not known)."
+                + (d.t1 > treeStart ? "  Arrived at +" + fmtUs(d.t1 - treeStart) : "");
+        if (e.up)                                             // the data goes up in the call, the answer only confirms it
+            return "L#" + e.c + " → L#" + e.p + ":  "
+                + (d.tc >= 0 && we > d.tc ? "waited " + fmtUs(we - d.tc) + " for its children,  " : "")
+                + "HPX prepared " + fmtUs(d.t0s - we) + ",  MPI " + fmtUs(Math.max(d.t0, d.t1, d.rq) - d.t0s)
+                + ";  data arrived at +" + fmtUs(d.t1 - treeStart)
+                + (q ? ";  confirmation of the parent at +" + fmtUs(q.tr - treeStart) : "");
         return "L#" + e.p + " → L#" + e.c + ":  "
             + (q ? "asked at +" + fmtUs(q.tc - treeStart) + " (request arrived after " + fmtUs(q.tr - q.tc) + "),  " : "")
             + (d.tc >= 0 && we > d.tc ? "waited " + fmtUs(we - d.tc) + " for the data of its parent,  " : "")
@@ -566,7 +900,7 @@ ApplicationWindow {
 
     function infoText(r) {
         if (!r)
-            return "Move the mouse over a piece of work or an arrow. Wheel zooms, drag moves.";
+            return "Move the mouse over a piece of work or an arrow. Two fingers scroll, pinch zooms (or Ctrl + wheel), drag moves.";
         return "L#" + r.src + " to L#" + r.dst + ", " + fmtSize(r.size) + ":  "
             + (r.tc >= 0 ? (waitEnd(r) > r.tc ? "waited " + fmtUs(waitEnd(r) - r.tc) + " for the data of its parent,  " : "")
                            + "HPX prepares " + fmtUs(r.t0s - waitEnd(r)) + ",  " : "")
@@ -633,6 +967,11 @@ ApplicationWindow {
                 text: "Open run..."
                 onClicked: fileDialog.open()
             }
+            Button {
+                text: "Start page"
+                visible: run.loaded
+                onClicked: run.unload()
+            }
             Label {
                 Layout.fillWidth: true
                 color: run.error !== "" ? "#ff8a80" : "white"
@@ -653,13 +992,13 @@ ApplicationWindow {
             Label {
                 color: "white"
                 font.bold: true
-                text: hpxWindow.groups.length > 0 ? hpxWindow.groupLabel(hpxWindow.groups[hpxWindow.current]) : ""
+                text: hpxWindow.groupLabel(hpxWindow.currentGroup)
             }
             Button { text: ">"; enabled: hpxWindow.current < hpxWindow.groups.length - 1; onClicked: hpxWindow.select(hpxWindow.current + 1) }
             Label {
                 color: "white"
-                text: hpxWindow.groups.length > 0
-                    ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groups[hpxWindow.current].end - hpxWindow.groups[hpxWindow.current].start) + " in total"
+                text: hpxWindow.currentGroup
+                    ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groupSpan) + " in total"
                     : ""
             }
             Item { Layout.fillWidth: true }
@@ -709,7 +1048,7 @@ ApplicationWindow {
                             {name: "MPI", v: hpxWindow.pathMpi, c: hpxWindow.mpiColor},
                             {name: "HPX picks up", v: hpxWindow.pathPick, c: hpxWindow.recvColor},
                             {name: "request waits at parent", v: hpxWindow.pathParent, c: hpxWindow.parentColor},
-                            {name: "action", v: hpxWindow.pathAction, c: hpxWindow.actionColor}
+                            {name: hpxWindow.treeUp ? "action + waiting for the other children" : "action", v: hpxWindow.pathAction, c: hpxWindow.actionColor}
                         ]
                         delegate: Rectangle {
                             required property var modelData
@@ -729,7 +1068,7 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 color: "black"
                                 font.pixelSize: 11
-                                visible: parent.width > 100
+                                visible: parent.width > implicitWidth + 10
                                 text: modelData.name + (modelData.name === "MPI" && hpxWindow.pathHops > 1 ? " (" + hpxWindow.pathHops + " hops)" : "") + " " + hpxWindow.fmtUs(modelData.v) + " (" + (100 * modelData.v / parent.parent.total).toFixed(0) + " %)"
                             }
                         }
@@ -780,7 +1119,7 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 color: "black"
                                 font.pixelSize: 11
-                                visible: parent.width > 90 && !hpxWindow.showPath
+                                visible: parent.width > implicitWidth + 10 && !hpxWindow.showPath
                                 text: modelData.name + " " + hpxWindow.fmtUs(modelData.v) + " (" + hpxWindow.pct(modelData.v) + ")"
                             }
                         }
@@ -860,7 +1199,7 @@ ApplicationWindow {
             Item { Layout.preferredWidth: 18 }
             Label { color: "#cccccc"; text: "Arrows:"; visible: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass }
             Repeater {
-                model: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass ? [["all", "All"], ["data", "Data"], ["requests", "Requests"]] : []
+                model: hpxWindow.viewMode === "locality" && hpxWindow.hasDataClass ? [["all", "All"], ["data", "Data"], ["requests", hpxWindow.ackOnly ? "Confirmations" : "Requests"]] : []
                 delegate: Button {
                     required property var modelData
                     text: modelData[1]
@@ -902,8 +1241,10 @@ ApplicationWindow {
                     for (const l of ls)
                         sum += l.tracks;
                     const avail = height - topMargin - 6 - ls.length * lanePad;
-                    trackH = Math.max(3, Math.min(20, avail / Math.max(sum, 1)));
-                    let y = topMargin;
+                    trackH = Math.max(9, Math.min(20, avail / Math.max(sum, 1)));
+                    hpxWindow.contentH = topMargin + 6 + sum * trackH + ls.length * lanePad;
+                    hpxWindow.scrollY = Math.max(0, Math.min(hpxWindow.scrollY, Math.max(hpxWindow.contentH - height, 0)));
+                    let y = topMargin - hpxWindow.scrollY;
                     for (const l of ls) {
                         l.y0 = y;
                         l.h = l.tracks * trackH + lanePad;
@@ -946,12 +1287,13 @@ ApplicationWindow {
                 }
                 onWidthChanged: requestPaint()
                 onHeightChanged: requestPaint()
+                onVisibleChanged: if (visible) requestPaint()
 
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    if (!run.loaded || hpxWindow.laneInfo.length === 0)
-                        return;
+                    if (!visible || !run.loaded || hpxWindow.laneInfo.length === 0)
+                        return;                                  // a hidden view must not touch the shared scroll state
                     layout();
                     const msgs = hpxWindow.laneMsgs;
                     const bh = trackH * 0.7;
@@ -967,7 +1309,7 @@ ApplicationWindow {
                     });
 
                     // time axis, 0 = start of this group
-                    const origin = hpxWindow.groups.length > 0 ? hpxWindow.groups[hpxWindow.current].start : 0;
+                    const origin = hpxWindow.currentGroup ? hpxWindow.currentGroup.start : 0;
                     const span = hpxWindow.viewEnd - hpxWindow.viewStart;
                     const raw = span / 8;
                     const pow10 = Math.pow(10, Math.floor(Math.log(Math.max(raw, 0.001)) / Math.LN10));
@@ -980,7 +1322,6 @@ ApplicationWindow {
                     for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step; t + origin <= hpxWindow.viewEnd && ticks < 40; t += step, ++ticks) {
                         const x = Math.round(xOf(t + origin)) + 0.5;
                         ctx.beginPath(); ctx.moveTo(x, topMargin - 4); ctx.lineTo(x, height); ctx.stroke();
-                        ctx.fillText(hpxWindow.fmtUs(t), x + 3, 13);
                     }
 
                     // what each locality does: the send on the sender, the receive on the receiver
@@ -1053,6 +1394,25 @@ ApplicationWindow {
                         ctx.strokeRect(xOf(m.pre.a), yOf(m.pre) - bh / 2, Math.max(xOf(m.pre.b) - xOf(m.pre.a), 2), bh);
                         ctx.strokeRect(xOf(m.rcv.a), yOf(m.rcv) - bh / 2, Math.max(xOf(m.rcv.b) - xOf(m.rcv.a), 3), bh);
                     }
+                    // the time axis stays on top while the lanes scroll under it
+                    ctx.fillStyle = "#2b2b2b";
+                    ctx.fillRect(0, 0, width, topMargin - 4);
+                    ctx.font = "11px sans-serif";
+                    ctx.fillStyle = "#999999";
+                    for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step, n = 0; t + origin <= hpxWindow.viewEnd && n < 40; t += step, ++n)
+                        ctx.fillText(hpxWindow.fmtUs(t), Math.round(xOf(t + origin)) + 3.5, 13);
+                }
+
+                PinchHandler {
+                    target: null
+                    property real last: 1
+                    onActiveChanged: last = 1
+                    onActiveScaleChanged: {
+                        const f = last / activeScale;
+                        last = activeScale;
+                        const tc = lanes.tOf(centroid.position.x);
+                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * f, tc + (hpxWindow.viewEnd - tc) * f);
+                    }
                 }
 
                 MouseArea {
@@ -1069,9 +1429,20 @@ ApplicationWindow {
                     }
                     onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
                     onWheel: (w) => {
-                        const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
-                        const tc = lanes.tOf(w.x);
-                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                        if (w.modifiers & Qt.ControlModifier) {            // Ctrl + wheel zooms the time axis
+                            const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
+                            const tc = lanes.tOf(w.x);
+                            hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                            return;
+                        }
+                        if (w.angleDelta.x !== 0) {                         // sideways: move in time
+                            const dt = -w.angleDelta.x / 4 / (lanes.width - lanes.leftMargin - lanes.rightMargin) * (hpxWindow.viewEnd - hpxWindow.viewStart);
+                            hpxWindow.setView(hpxWindow.viewStart + dt, hpxWindow.viewEnd + dt);
+                        }
+                        if (w.angleDelta.y !== 0) {                         // up / down: scroll the rows
+                            hpxWindow.scrollBy(-w.angleDelta.y / 2, lanes.height);
+                            lanes.requestPaint();
+                        }
                     }
                     onPositionChanged: (e) => {
                         if (pressed) {
@@ -1131,11 +1502,14 @@ ApplicationWindow {
                 }
                 // arrow: the head grows with the width of the line and the shaft ends inside the head (a shaft that runs to the
                 // tip pokes out in front of the head)
-                function arrowHead(ctx, x0, y0, x1, y1, w, color) {
+                function arrowHead(ctx, x0, y0, x1, y1, w, color, dashed) {
                     const ang = Math.atan2(y1 - y0, x1 - x0), h = 8 * sc + w * 2.6;
                     const bx = x1 - h * 0.8 * Math.cos(ang), by = y1 - h * 0.8 * Math.sin(ang);
                     ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w;
+                    if (dashed)
+                        ctx.setLineDash([5 * sc, 4 * sc]);       // no MPI message was recorded: the times come from the parcel log
                     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bx, by); ctx.stroke();
+                    ctx.setLineDash([]);
                     ctx.beginPath(); ctx.moveTo(x1, y1);
                     ctx.lineTo(x1 - h * Math.cos(ang - 0.42), y1 - h * Math.sin(ang - 0.42));
                     ctx.lineTo(x1 - h * Math.cos(ang + 0.42), y1 - h * Math.sin(ang + 0.42));
@@ -1169,15 +1543,25 @@ ApplicationWindow {
                         const onPath = crit && e.data.crit;
                         const dataColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,255,255,0.3)" : "#ffffff"));
                         const reqColor = hot ? "#ff4081" : (onPath ? "#ffd600" : (crit ? "rgba(255,183,77,0.3)" : "#ffb74d"));
-                        arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, Math.max((2 + Math.min(Math.sqrt(e.data.size) / 150, 2)) * sc, 1) + (onPath || hot ? 1 : 0), dataColor);
-                        if (e.req)
-                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, Math.max(1.2 * sc, 0.8) + (onPath || hot ? 1 : 0), reqColor);
+                        const wData = Math.max((2 + Math.min(Math.sqrt(e.data.size) / 150, 2)) * sc, 1) + (onPath || hot ? 1 : 0);
+                        const wReq = Math.max(1.2 * sc, 0.8) + (onPath || hot ? 1 : 0);
+                        if (e.up) {                                    // the data moves up: it uses the line from the child to the parent
+                            arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wData, dataColor, e.data.missing);
+                            if (e.req)
+                                arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wReq, reqColor, e.req.missing);
+                        } else {
+                            arrowHead(ctx, g.dx0, g.dy0, g.dx1, g.dy1, wData, dataColor, e.data.missing);
+                            if (e.req)
+                                arrowHead(ctx, g.qx0, g.qy0, g.qx1, g.qy1, wReq, reqColor, e.req.missing);
+                        }
                         // the time this hop took: from the arrival at the parent (or the request, at the root) to the arrival here
                         const up = hpxWindow.treeNodeMap[e.p] ? e.data : null;
                         let from = e.req ? e.req.tc : hpxWindow.treeStart;
                         for (const o of hpxWindow.treeEdges)
                             if (o.c === e.p)
                                 from = o.data.t1;
+                        if (e.up)                                      // data moving up: from the parcel created to its arrival
+                            from = e.data.tc >= 0 ? e.data.tc : e.data.t0s;
                         // 62 % along the edge, so that the labels of many edges that start in one node do not run into each other
                         if (!compact || hot)
                             label(ctx, "+" + hpxWindow.fmtUs(e.data.t1 - from), g.dx0 + (g.dx1 - g.dx0) * 0.62 + 14, g.dy0 + (g.dy1 - g.dy0) * 0.62 + 4,
@@ -1186,9 +1570,15 @@ ApplicationWindow {
                     for (const n of hpxWindow.treeNodes) {
                         const x = nx(n), y = ny(n);
                         let arrive = null;
-                        for (const e of hpxWindow.treeEdges)
-                            if (e.c === n.loc)
+                        for (const e of hpxWindow.treeEdges) {
+                            if (hpxWindow.treeUp) {                    // up: when the node had the data of all its children
+                                if (e.p === n.loc)
+                                    arrive = Math.max(arrive === null ? -Infinity : arrive, e.data.t1 - hpxWindow.treeStart);
+                            } else if (e.c === n.loc) {
                                 arrive = e.data.t1 - hpxWindow.treeStart;
+                            }
+                        }
+                        const isRoot = n.depth === 0;
                         const onPath = crit && hpxWindow.pathChain.indexOf("L#" + n.loc + " ") >= 0 || (crit && hpxWindow.pathChain.endsWith("L#" + n.loc));
                         ctx.fillStyle = "#2f2f2f";
                         ctx.beginPath(); ctx.arc(x, y, nodeR, 0, 2 * Math.PI); ctx.fill();
@@ -1209,16 +1599,19 @@ ApplicationWindow {
                             hotChild = hpxWindow.treeEdges[hpxWindow.treeHover].c === n.loc;
                         if (!compact)
                             // to the left of the node: the edges to the parent and to the children leave it above and below
-                            label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb");
+                            { if (hpxWindow.treeUp) { if (arrive !== null) label(ctx, (isRoot ? "root, " : "") + "all data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb");
+                                                      else if (isRoot) label(ctx, "root", x - nodeR - 7, y + 4, "right", "#bbbbbb"); }
+                              else label(ctx, arrive === null ? "root" : "data +" + hpxWindow.fmtUs(arrive), x - nodeR - 7, y + 4, "right", "#bbbbbb"); }
                         else if (hotChild && arrive !== null)
                             label(ctx, "data +" + hpxWindow.fmtUs(arrive), x, y + nodeR + 14, "center", "#ffffff");
-                        else if (arrive === null)
+                        else if (isRoot)
                             label(ctx, "root", x - nodeR - 6, y + 4, "right", "#bbbbbb");
                     }
                     ctx.textAlign = "left";
                     ctx.fillStyle = "#999999";
                     ctx.font = "11px sans-serif";
-                    ctx.fillText("white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the broadcast"
+                    ctx.fillText((hpxWindow.treeUp ? "white: data to the parent   orange: the message back   +t: time of the hop   all data +t: the node had the data of all its children" : "white: data from the parent   orange: request to the parent   +t: time of the hop   data +t: arrival after the start of the group")
+                                 + (hpxWindow.treeEdges.some(x => x.data.missing || (x.req && x.req.missing)) ? "   dashed: no MPI message recorded, times from the parcel log" : "")
                                  + (compact ? "   (many localities: hover an edge for its times)" : ""), 14, height - 14);
                 }
 
@@ -1253,7 +1646,7 @@ ApplicationWindow {
                 readonly property int rightMargin: 12
 
                 function rowHeight() {
-                    return Math.max(4, Math.min(34, (height - topMargin - 6) / Math.max(hpxWindow.rows.length, 1)));
+                    return Math.max(12, Math.min(34, (height - topMargin - 6) / Math.max(hpxWindow.rows.length, 1)));
                 }
                 function xOf(t) {
                     return leftMargin + (t - hpxWindow.viewStart) / (hpxWindow.viewEnd - hpxWindow.viewStart) * (width - leftMargin - rightMargin);
@@ -1263,15 +1656,18 @@ ApplicationWindow {
                 }
                 onWidthChanged: requestPaint()
                 onHeightChanged: requestPaint()
+                onVisibleChanged: if (visible) requestPaint()
 
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    if (!run.loaded)
-                        return;
+                    if (!visible || !run.loaded)
+                        return;                                  // a hidden view must not touch the shared scroll state
                     const rows = hpxWindow.rows;
                     const rh = rowHeight();
-                    const origin = hpxWindow.groups.length > 0 ? hpxWindow.groups[hpxWindow.current].start : 0;
+                    hpxWindow.contentH = topMargin + 6 + rows.length * rh;
+                    hpxWindow.scrollY = Math.max(0, Math.min(hpxWindow.scrollY, Math.max(hpxWindow.contentH - height, 0)));
+                    const origin = hpxWindow.currentGroup ? hpxWindow.currentGroup.start : 0;
                     const span = hpxWindow.viewEnd - hpxWindow.viewStart;
                     const raw = span / 8;
                     const pow10 = Math.pow(10, Math.floor(Math.log(Math.max(raw, 0.001)) / Math.LN10));
@@ -1285,13 +1681,14 @@ ApplicationWindow {
                     for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step; t + origin <= hpxWindow.viewEnd && ticks < 40; t += step, ++ticks) {
                         const x = Math.round(xOf(t + origin)) + 0.5;
                         ctx.beginPath(); ctx.moveTo(x, topMargin - 4); ctx.lineTo(x, height); ctx.stroke();
-                        ctx.fillText(hpxWindow.fmtUs(t), x + 3, 13);
                     }
 
                     const bar = Math.max(rh * 0.6, 2);
                     for (let i = 0; i < rows.length; ++i) {
                         const r = rows[i];
-                        const y = topMargin + i * rh, mid = y + rh / 2;
+                        const y = topMargin + i * rh - hpxWindow.scrollY, mid = y + rh / 2;
+                        if (y + rh < topMargin || y > height)
+                            continue;
                         if (i === hpxWindow.hoverIndex) {
                             ctx.fillStyle = "rgba(255,255,255,0.10)";
                             ctx.fillRect(0, y, width, rh);
@@ -1340,6 +1737,24 @@ ApplicationWindow {
                                            Math.max(xOf(Math.max(r.t1, r.tr, r.td)) - xOf(Math.min(r.tc >= 0 ? r.tc : r.t0s, r.t0s)) + 2, 4), bar + 2);
                         }
                     }
+                    ctx.fillStyle = "#2b2b2b";
+                    ctx.fillRect(0, 0, width, topMargin - 4);
+                    ctx.font = "11px sans-serif";
+                    ctx.fillStyle = "#999999";
+                    for (let t = Math.ceil((hpxWindow.viewStart - origin) / step) * step, n = 0; t + origin <= hpxWindow.viewEnd && n < 40; t += step, ++n)
+                        ctx.fillText(hpxWindow.fmtUs(t), Math.round(xOf(t + origin)) + 3.5, 13);
+                }
+
+                PinchHandler {
+                    target: null
+                    property real last: 1
+                    onActiveChanged: last = 1
+                    onActiveScaleChanged: {
+                        const f = last / activeScale;
+                        last = activeScale;
+                        const tc = waterfall.tOf(centroid.position.x);
+                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * f, tc + (hpxWindow.viewEnd - tc) * f);
+                    }
                 }
 
                 MouseArea {
@@ -1350,9 +1765,20 @@ ApplicationWindow {
                     property real endAt: 0
                     onPressed: (e) => { pressX = e.x; startAt = hpxWindow.viewStart; endAt = hpxWindow.viewEnd; }
                     onWheel: (w) => {
-                        const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
-                        const tc = waterfall.tOf(w.x);
-                        hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                        if (w.modifiers & Qt.ControlModifier) {            // Ctrl + wheel zooms the time axis
+                            const factor = w.angleDelta.y > 0 ? 0.8 : 1.25;
+                            const tc = waterfall.tOf(w.x);
+                            hpxWindow.setView(tc - (tc - hpxWindow.viewStart) * factor, tc + (hpxWindow.viewEnd - tc) * factor);
+                            return;
+                        }
+                        if (w.angleDelta.x !== 0) {                         // sideways: move in time
+                            const dt = -w.angleDelta.x / 4 / (waterfall.width - waterfall.leftMargin - waterfall.rightMargin) * (hpxWindow.viewEnd - hpxWindow.viewStart);
+                            hpxWindow.setView(hpxWindow.viewStart + dt, hpxWindow.viewEnd + dt);
+                        }
+                        if (w.angleDelta.y !== 0) {                         // up / down: scroll the rows
+                            hpxWindow.scrollBy(-w.angleDelta.y / 2, waterfall.height);
+                            waterfall.requestPaint();
+                        }
                     }
                     onPositionChanged: (e) => {
                         if (pressed) {
@@ -1360,12 +1786,42 @@ ApplicationWindow {
                             hpxWindow.setView(startAt - dt, startAt - dt + (endAt - startAt));
                             return;
                         }
-                        const i = Math.floor((e.y - waterfall.topMargin) / waterfall.rowHeight());
+                        const i = Math.floor((e.y - waterfall.topMargin + hpxWindow.scrollY) / waterfall.rowHeight());
                         const n = i >= 0 && i < hpxWindow.rows.length ? i : -1;
                         if (n !== hpxWindow.hoverIndex) {
                             hpxWindow.hoverIndex = n;
                             waterfall.requestPaint();
                         }
+                    }
+                }
+            }
+
+            // vertical scrolling when there are more lanes / messages than fit
+            ScrollBar {
+                id: vbar
+                orientation: Qt.Vertical
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.topMargin: 24
+                visible: (hpxWindow.viewMode === "locality" || hpxWindow.viewMode === "message") && hpxWindow.contentH > parent.height + 1
+                policy: ScrollBar.AlwaysOn
+                size: parent.height / Math.max(hpxWindow.contentH, 1)
+                // not bound to scrollY (that would be a binding loop with the handler below): synced by hand
+                function sync() {
+                    if (!pressed)
+                        position = hpxWindow.contentH > 0 ? hpxWindow.scrollY / hpxWindow.contentH : 0;
+                }
+                Connections {
+                    target: hpxWindow
+                    function onScrollYChanged() { vbar.sync(); }
+                    function onContentHChanged() { vbar.sync(); }
+                }
+                onPositionChanged: {
+                    if (pressed) {
+                        hpxWindow.scrollY = Math.max(0, Math.min(position * hpxWindow.contentH, hpxWindow.contentH - parent.height));
+                        lanes.requestPaint();
+                        waterfall.requestPaint();
                     }
                 }
             }
@@ -1394,7 +1850,7 @@ ApplicationWindow {
             }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.mpiRecvColor; border.color: hpxWindow.mpiColor; border.width: 1.5; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "MPI receive" } }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.recvColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX picks up" } }
-            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.actionColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "action runs" } }
+            Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.actionColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: hpxWindow.criticalOn && hpxWindow.hasTree && hpxWindow.treeUp ? "action runs (on the path: incl. waiting for the other children)" : "action runs" } }
             Row { spacing: 5; visible: hpxWindow.sumParent > 0; Rectangle { width: 20; height: 10; color: hpxWindow.parentColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "request waits at parent" } }
             Row { spacing: 5; Rectangle { width: 2; height: 14; color: "white" } Label { color: "white"; text: "send noticed by HPX" } }
             Row { spacing: 5; visible: hpxWindow.viewMode === "locality"; Label { color: hpxWindow.recvColor; font.bold: true; text: "\u25C6" } Label { color: "white"; text: "HPX saw the header of a large message" } }
@@ -1418,25 +1874,82 @@ ApplicationWindow {
         }
     }
 
-    // start screen
+    // start screen: the logo, open a file, and the examples that are built in (in their own frame)
     ColumnLayout {
-        anchors.centerIn: parent
+        anchors.fill: parent
+        anchors.topMargin: 84          // below the bar with the Open button, inside the dark area
+        anchors.leftMargin: 20
+        anchors.rightMargin: 20
+        anchors.bottomMargin: 16
         visible: !run.loaded
-        spacing: 14
+        spacing: 12
         Image {
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredHeight: Math.max(160, Math.min(460, hpxWindow.height - 330))
+            Layout.preferredHeight: Math.max(100, Math.min(180, hpxWindow.height * 0.22))
             Layout.preferredWidth: Layout.preferredHeight * sourceSize.width / Math.max(1, sourceSize.height)
             source: "qrc:/qt/qml/EduHPX/assets/logo.png"
             fillMode: Image.PreserveAspectFit
             smooth: true
             mipmap: true
         }
-        Label { Layout.alignment: Qt.AlignHCenter; color: "#cccccc"; text: "Open a run file (.csv) or drop it here." }
-        Button { Layout.alignment: Qt.AlignHCenter; text: "Open run file..."; onClicked: fileDialog.open() }
-        Button { Layout.alignment: Qt.AlignHCenter; text: "Example: flat broadcast"
-                 onClicked: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/flat_broadcast_16loc_4nodes.csv") }
-        Button { Layout.alignment: Qt.AlignHCenter; text: "Example: tree broadcast"
-                 onClicked: hpxWindow.openFile("qrc:/qt/qml/EduHPX/examples/hierarchical_broadcast_16loc_4nodes.csv") }
+        RowLayout {
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 14
+            Label { color: "#cccccc"; text: "Open a run file (.csv) or drop it here" }
+            Button { text: "Open run file..."; onClicked: fileDialog.open() }
+        }
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.maximumWidth: 980
+            Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: 8
+            color: "#363636"
+            border.color: "#5a5a5a"
+            radius: 4
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+                    Label { color: "white"; font.bold: true; font.pixelSize: 20; text: "Examples" }
+                    Label { Layout.fillWidth: true; color: "#aaaaaa"; elide: Text.ElideRight
+                            text: "every HPX collective, flat and as a tree, built into the program" }
+                }
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#5a5a5a" }
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: availableWidth
+                    ExampleList {
+                        width: parent.width - 16
+                        onChosen: (file) => hpxWindow.openFile(file)
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: examplesDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Examples"
+        width: Math.min(hpxWindow.width - 60, 940)
+        height: Math.min(hpxWindow.height - 60, 700)
+        standardButtons: Dialog.Close
+        ScrollView {
+            anchors.fill: parent
+            clip: true
+            contentWidth: availableWidth
+            ExampleList {
+                width: parent.width - 16
+                onChosen: (file) => { examplesDialog.close(); hpxWindow.openFile(file); }
+            }
+        }
     }
 }

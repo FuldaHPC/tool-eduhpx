@@ -1,12 +1,52 @@
 # Example run files
 
-Open them with the viewer (*File > Examples* has the first three built in).
+All of them are built into the viewer: the start screen lists them, and *File > Examples...* opens the same list.
+Or open a file from this folder with *Open run...*.
 
-| File | Program | What it shows |
-|---|---|---|
-| `flat_broadcast_16loc_4nodes.csv` | 20 flat broadcasts of 64 KiB | the root answers 15 requests one by one |
-| `hierarchical_broadcast_16loc_4nodes.csv` | 20 hierarchical broadcasts (binary tree) | every node asks its parent, data moves down the tree |
-| `mixed_4loc_1node.csv` | mixed point-to-point traffic, no collective | bursts of messages |
+## The collectives
 
-The files were made from merged runs of the first EduHPX prototype (`tools/json_to_csv.py`). More examples (all
-collectives, flat and hierarchical, on 4 or more nodes) will follow from runs with the scripts.
+Every HPX collective, once flat (all localities talk to one root) and once as a tree (`create_hierarchical_communicator`,
+arity 2), each on 16 localities (4 nodes), 32 localities (4 nodes) and, except all-to-all, 64 localities (8 nodes).
+File name: `<collective>_<flat|hier>_<localities>loc_<nodes>nodes.csv`.
+
+| Collective | In the tree variant (as seen in the runs) |
+|---|---|
+| `bcast` Broadcast | every node asks its parent, data moves down |
+| `reduce`, `gather` | values move up the tree |
+| `scatter` | blocks move down the tree |
+| `allreduce` | a reduce up, then a broadcast down |
+| `allgather` | a gather up, then a broadcast down |
+| `alltoall`, `alltoall_large` (8 KiB per pair) | a gather inside each half of the localities, an exchange between the two roots (L#0 and L#8 with 16 localities), a scatter inside each half. The viewer shows the gather and the scatter as two trees side by side |
+| `alltoall_pairwise` (flat only) | every locality sends to every other one through its own channel (fixed-size elements of 8 KiB); no tree, a complete graph |
+| `scan_ex`, `scan_in` (exclusive / inclusive scan) | a gather and a scatter |
+| `barrier` | the barrier of HPX, flat or as a tree |
+
+`mixed_4loc_1node.csv` is ordinary point-to-point traffic without a collective (an older run of the first prototype).
+
+## How they were made
+
+`eduhpx-run ... --only-collectives` with the test program `tools/hpx_collectives` (in this repository) (HPX master `e65a7a3`, the
+measuring MPI on Open MPI 5.0.11rc1, UCX, 4 threads per locality, one run each). Broadcast: 64 KiB, other collectives about
+4 KiB per locality, 10 repetitions (5 with 64 localities). The start-up and shutdown traffic of HPX is left out; the four
+barriers that HPX itself runs at the start and the end remain as groups.
+
+## What to keep in mind
+
+- **One run each, on one cluster.** They show what the communication looks like, not how fast a collective is.
+- **"HPX prepares" can be waiting.** A parcel whose data is not ready yet (the answer of a collective that waits for the
+  last locality) is created early and sent late; the parcel log has no time for "the data became ready", so that waiting
+  is drawn as *HPX prepares* (for example the long bars at the root of a flat all-to-all). The tree view of a broadcast
+  separates it as *waits for data*.
+- **Data, requests, confirmations.** A call of HPX (`get_direct` / `set_direct`) goes from a locality to its parent, the
+  parent answers. For a get the data is in the answer (the call is the request); for a set the data is in the call and the
+  answer only confirms it (the button says *Confirmations*); an all-gather carries data in both directions.
+- **On the critical path of a gather or reduce, "action" includes waiting.** It is the time from the arrival of the data at
+  a parent until the parent sends its own data, so it also contains the wait for its other children.
+- **Almost every parcel has its MPI messages.** 8 of 64 786 parcels have no matching MPI send (all in runs with 64
+  localities); every MPI receive of a sent message is found. Such parcels are counted in the title but not drawn in the locality
+  and message views; in the tree view they are dashed. The MPI parcelport packs several small parcels to one destination into one
+  MPI message; they then share its MPI times, so adding up the MPI time of all messages counts that message more than once. A
+  large parcel (zero-copy chunks) is several MPI messages.
+- **Clocks.** The offsets between the nodes are measured with a ping-pong at the start and then corrected with the MPI
+  messages themselves (the fastest messages of a pair of nodes must take the same time in both directions); the corrections
+  were between -60 and +60 microseconds. Times of different nodes are good to a few microseconds, not better.

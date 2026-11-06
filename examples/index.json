@@ -1,0 +1,485 @@
+{
+ "collectives": [
+  {
+   "id": "bcast",
+   "title": "Broadcast",
+   "note": "One locality sends data to all others. Flat: the root answers every request one by one; tree: every node asks its parent.",
+   "examples": [
+    {
+     "file": "bcast_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "bcast_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "bcast_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "bcast_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "bcast_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "bcast_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "reduce",
+   "title": "Reduce",
+   "note": "All localities combine a value at the root.",
+   "examples": [
+    {
+     "file": "reduce_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "reduce_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "reduce_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "reduce_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "reduce_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "reduce_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "allreduce",
+   "title": "All-reduce",
+   "note": "Combine a value and give the result to everybody. In the tree variant HPX reduces up the tree and broadcasts the result down.",
+   "examples": [
+    {
+     "file": "allreduce_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "allreduce_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "allreduce_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "allreduce_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "allreduce_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "allreduce_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "gather",
+   "title": "Gather",
+   "note": "The root collects one block from every locality.",
+   "examples": [
+    {
+     "file": "gather_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "gather_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "gather_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "gather_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "gather_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "gather_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "allgather",
+   "title": "All-gather",
+   "note": "Everybody gets all blocks. In the tree variant HPX gathers up and broadcasts down.",
+   "examples": [
+    {
+     "file": "allgather_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "allgather_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "allgather_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "allgather_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "allgather_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "allgather_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "scatter",
+   "title": "Scatter",
+   "note": "The root sends a different block to every locality.",
+   "examples": [
+    {
+     "file": "scatter_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "scatter_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "scatter_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "scatter_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "scatter_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "scatter_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "alltoall",
+   "title": "All-to-all",
+   "note": "Every locality sends a small value to every other one. In the tree variant HPX also uses gather and scatter.",
+   "examples": [
+    {
+     "file": "alltoall_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    }
+   ]
+  },
+  {
+   "id": "alltoall_large",
+   "title": "All-to-all, large messages",
+   "note": "The same with 8 KiB per pair.",
+   "examples": [
+    {
+     "file": "alltoall_large_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_large_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_large_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_large_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    }
+   ]
+  },
+  {
+   "id": "alltoall_pairwise",
+   "title": "All-to-all, pairwise",
+   "note": "From 4 KiB per destination on HPX leaves the central communicator: every locality sends directly to every other one (here 8 KiB each).",
+   "examples": [
+    {
+     "file": "alltoall_pairwise_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "alltoall_pairwise_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    }
+   ]
+  },
+  {
+   "id": "scan_ex",
+   "title": "Exclusive scan",
+   "note": "Prefix sum over the localities, without the own value. In the tree variant HPX uses gather and scatter.",
+   "examples": [
+    {
+     "file": "scan_ex_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "scan_ex_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "scan_ex_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "scan_ex_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "scan_ex_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "scan_ex_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "scan_in",
+   "title": "Inclusive scan",
+   "note": "Prefix sum over the localities, with the own value. In the tree variant HPX uses gather and scatter.",
+   "examples": [
+    {
+     "file": "scan_in_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "scan_in_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "scan_in_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "scan_in_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "scan_in_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "scan_in_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "barrier",
+   "title": "Barrier",
+   "note": "All localities wait for each other.",
+   "examples": [
+    {
+     "file": "barrier_flat_16loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "barrier_hier_16loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 16,
+     "nodes": 4
+    },
+    {
+     "file": "barrier_flat_32loc_4nodes.csv",
+     "kind": "flat",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "barrier_hier_32loc_4nodes.csv",
+     "kind": "hier",
+     "localities": 32,
+     "nodes": 4
+    },
+    {
+     "file": "barrier_flat_64loc_8nodes.csv",
+     "kind": "flat",
+     "localities": 64,
+     "nodes": 8
+    },
+    {
+     "file": "barrier_hier_64loc_8nodes.csv",
+     "kind": "hier",
+     "localities": 64,
+     "nodes": 8
+    }
+   ]
+  },
+  {
+   "id": "other",
+   "title": "Mixed traffic",
+   "note": "Point-to-point traffic without a collective, grouped into bursts.",
+   "examples": [
+    {
+     "file": "mixed_4loc_1node.csv",
+     "kind": "mixed",
+     "localities": 0,
+     "nodes": 0
+    }
+   ]
+  }
+ ]
+}

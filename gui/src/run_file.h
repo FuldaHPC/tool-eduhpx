@@ -34,6 +34,8 @@ public:
 
     // Reads a run file (file: or qrc: URL). Returns false and sets error (with the line number) on failure.
     Q_INVOKABLE bool load(const QUrl &file);
+    // Forgets the run: the viewer goes back to its start page.
+    Q_INVOKABLE void unload();
 
     bool loaded() const { return m_loaded; }
     QString name() const { return m_name; }
