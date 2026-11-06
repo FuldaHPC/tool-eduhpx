@@ -593,7 +593,7 @@ ApplicationWindow {
                     last = r;
                 }
             }
-        const segs = [];
+        let segs = [];
         const hops = [];
         const add = (kind, a, b, row) => {
             row.crit = true;
@@ -625,6 +625,7 @@ ApplicationWindow {
             }
             break;
         }
+        segs = clipSegments(segs);
         let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0, par = 0;
         for (const sg of segs) {
             a0 = Math.min(a0, sg.a);
@@ -781,7 +782,8 @@ ApplicationWindow {
             const r = e.data, t = Math.max(r.t1, r.tr, r.td);
             if (t > lastEnd) { lastEnd = t; last = r; }
         }
-        const segs = [], hops = [];
+        let segs = [];
+        const hops = [];
         const add = (kind, a, b, row) => {
             row.crit = true;
             if (b > a)
@@ -832,6 +834,7 @@ ApplicationWindow {
             }
             cur = from;
         }
+        segs = clipSegments(segs);
         let a0 = Infinity, prep = 0, mpi = 0, pick = 0, act = 0, par = 0;
         for (const sg of segs) {
             a0 = Math.min(a0, sg.a);
@@ -855,6 +858,22 @@ ApplicationWindow {
         for (let i = hops.length - 1; i >= 0; --i)
             names.push(hops[i].dst);
         pathChain = names.map(l => "L#" + l).join(" → ");
+    }
+
+    // The pieces of the critical path follow each other in time. Where two of them overlap (a large message of which HPX saw
+    // the header before the MPI receive was complete), the later one keeps its time and the earlier one is shortened.
+    function clipSegments(list) {
+        const sorted = list.slice().sort((x, y) => (y.b - x.b) || (y.a - x.a));
+        const out = [];
+        let limit = Infinity;
+        for (const sg of sorted) {
+            const b = Math.min(sg.b, limit);
+            if (b > sg.a) {
+                out.push({kind: sg.kind, a: sg.a, b: b});
+                limit = sg.a;
+            }
+        }
+        return out;
     }
 
     function treeInfoText(e) {
