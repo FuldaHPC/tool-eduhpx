@@ -48,7 +48,7 @@ ApplicationWindow {
     readonly property color recvColor: "#ffb74d"         // HPX picks up: light orange
     readonly property color actionColor: "#ffe082"
 
-    property var groups: []         // { kind, k, total, rows, start, end }
+    property var groups: []         // { kind, k, total, rows, start, end, sortStart, sortRank }
     property int current: 0
     property var rows: []           // rows of the current group
     property double viewStart: 0
@@ -174,6 +174,11 @@ ApplicationWindow {
     function kindLabel(kind) {
         const t = String(kind).replace(/_/g, "-");
         return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    // The three groups of one hierarchical all-to-all share k and are the phases of one user call. The scatter
+    // posts its requests before the exchange has sent its data, so their start times do not sort them in this order.
+    function phaseRank(kind) {
+        return kind === "gather" ? 0 : kind === "all_to_all" ? 1 : kind === "scatter" ? 2 : -1;
     }
     // share of the time of all messages of this group, as text
     function pct(v) {
@@ -304,7 +309,25 @@ ApplicationWindow {
             list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end, lost: lostByKey[key] || []});
             total[rws[0].kind] = (total[rws[0].kind] || 0) + 1;
         }
-        list.sort((a, b) => a.start - b.start);
+        // keep the phases of one hierarchical all-to-all together: gather k, exchange k, scatter k
+        const phaseStart = {}, phaseSeen = {};
+        for (const g of list) {
+            const rank = phaseRank(g.kind);
+            if (rank >= 0) {
+                const seen = phaseSeen[g.k] = phaseSeen[g.k] || [false, false, false];
+                seen[rank] = true;
+                if (phaseStart[g.k] === undefined || g.start < phaseStart[g.k])
+                    phaseStart[g.k] = g.start;
+            }
+        }
+        for (const g of list) {
+            const rank = phaseRank(g.kind);
+            const seen = rank >= 0 ? phaseSeen[g.k] : undefined;
+            const complete = seen && seen[0] && seen[1] && seen[2];
+            g.sortStart = complete ? phaseStart[g.k] : g.start;
+            g.sortRank = complete ? rank : -1;
+        }
+        list.sort((a, b) => a.sortStart - b.sortStart || a.sortRank - b.sortRank);
         for (const g of list)
             g.total = total[g.kind];
         let bytes = 0, parcels = 0;
