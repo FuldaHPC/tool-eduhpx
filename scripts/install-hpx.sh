@@ -11,9 +11,9 @@
 # internet access (HPX downloads Boost, asio and Tracy sources while it configures).
 set -euo pipefail
 
-HPX_COMMIT=e65a7a3cd7b200df9d4fd45b5d12f07dc4065840
-HPX_TARBALL_SHA256=d1603cd55482259dbe9f588efd25d36150dd9b91bf053423db6fcfd6fa848c13
-HPX_URL=https://github.com/STEllAR-GROUP/hpx/archive/${HPX_COMMIT}.tar.gz
+HPX_COMMIT=ec3b59b1fa0b1b5decf21141983c1b725d9323cf
+HPX_TARBALL_SHA256=3f2fb2158d00e25c79a3d9f58451afe1f46b797c667d2202776842fee932c865
+HPX_URL=https://github.com/TheHPXProject/hpx/archive/${HPX_COMMIT}.tar.gz
 BOOST_VERSION=1.86.0
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -179,6 +179,8 @@ cmake_args=(
     # Tracy is only the compile gate of the parcel hooks; it is never connected at run time
     -DHPX_WITH_TRACY=ON -DHPX_WITH_PARCEL_PROFILING=ON
     -DHPX_WITH_TRACING_LIFECYCLE_EVENTS=OFF -DHPX_WITH_TRACING_WORK_STEALING_EVENTS=OFF -DHPX_WITH_TRACING_CAUSAL_EVENTS=OFF
+    # lock events (HPX PR 8001, off by default since ec3b59b) cost about 10 % with Tracy compiled in, even without a profiler
+    -DHPX_WITH_TRACING_LOCK_EVENTS=OFF
     -DHPX_WITH_EXAMPLES=OFF -DHPX_WITH_TESTS=OFF -DHPX_WITH_DOCUMENTATION=OFF
 )
 [ -n "$hwloc_root" ] && cmake_args+=(-DHWLOC_ROOT="$hwloc_root")

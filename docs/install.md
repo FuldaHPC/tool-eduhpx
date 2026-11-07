@@ -6,7 +6,7 @@ EduHPX shows what HPX and MPI do for every message. For that it needs
 2. **HPX with the parcel log**, which is built by `scripts/install-hpx.sh` from this repository.
 
 HPX itself is not part of this repository. The script downloads one fixed HPX commit from GitHub, checks the checksum of the
-download, applies `patches/hpx-e65a7a3c.patch` and builds HPX against the measuring MPI.
+download, applies `patches/hpx-ec3b59b1.patch` and builds HPX against the measuring MPI.
 
 ## Install
 
