@@ -23,6 +23,8 @@ jobs:
   release:
     needs: [appimage, macos, windows]
     runs-on: ubuntu-22.04
+    # publishing waits for the approval of the reviewer set in Settings > Environments > release
+    environment: release
     permissions:
       contents: write
     steps:
