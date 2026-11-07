@@ -175,10 +175,51 @@ ApplicationWindow {
         const t = String(kind).replace(/_/g, "-");
         return t.charAt(0).toUpperCase() + t.slice(1);
     }
-    // The three groups of one hierarchical all-to-all share k and are the phases of one user call. The scatter
-    // posts its requests before the exchange has sent its data, so their start times do not sort them in this order.
-    function phaseRank(kind) {
-        return kind === "gather" ? 0 : kind === "all_to_all" ? 1 : kind === "scatter" ? 2 : -1;
+    // Some collectives are several groups of messages in a hierarchical run: the groups of one call share k (the k-th call) and
+    // are its steps. The steps overlap in time (the scatter posts its requests before the exchange has sent its data), so their
+    // start times alone do not sort them in the order of the algorithm.
+    readonly property var callDefs: [
+        {name: "All-to-all", kinds: ["gather", "all_to_all", "scatter"], steps: ["gather", "exchange", "scatter"]},
+        {name: "All-reduce", kinds: ["reduce", "broadcast"], steps: ["reduce", "broadcast"]},
+        {name: "All-gather", kinds: ["gather", "broadcast"], steps: ["gather", "broadcast"]},
+        {name: "Scan", kinds: ["gather", "scatter"], steps: ["gather", "scatter"]}
+    ]
+    // marks the groups that belong together: callName, callK, step (1..), steps, stepNames, callTotal; sorts the list
+    function linkCalls(list) {
+        const byK = {};
+        for (const g of list)
+            (byK[g.k] = byK[g.k] || {})[g.kind] = g;
+        for (const g of list) {
+            g.callName = ""; g.step = 0; g.sortStart = g.start; g.sortRank = -1;
+        }
+        const count = {};
+        for (const k of Object.keys(byK)) {
+            const here = byK[k];
+            const fit = callDefs.filter(d => d.kinds.every(kd => here[kd]));
+            const def = fit.find(d => d.name === "All-to-all") || (fit.length === 1 ? fit[0] : null);
+            if (!def)
+                continue;                                    // none, or ambiguous (for example gather, scatter and broadcast)
+            const members = def.kinds.map(kd => here[kd]);
+            // one call: the groups follow each other without a gap (a gap of more than 0.5 ms means separate calls)
+            const byStart = members.slice().sort((a, b) => a.start - b.start);
+            let reach = byStart[0].end, joined = true;
+            for (const g of byStart.slice(1)) {
+                if (g.start > reach + 500) { joined = false; break; }
+                reach = Math.max(reach, g.end);
+            }
+            if (!joined)
+                continue;
+            const first = byStart[0].start;
+            members.forEach((g, i) => {
+                g.callName = def.name; g.callK = g.k; g.step = i + 1; g.steps = def.steps.length; g.stepNames = def.steps;
+                g.sortStart = first; g.sortRank = i;
+            });
+            count[def.name] = (count[def.name] || 0) + 1;
+        }
+        for (const g of list)
+            if (g.step > 0)
+                g.callTotal = count[g.callName];
+        list.sort((a, b) => a.sortStart - b.sortStart || a.sortRank - b.sortRank);
     }
     // share of the time of all messages of this group, as text
     function pct(v) {
@@ -186,7 +227,20 @@ ApplicationWindow {
         return total > 0 ? (100 * v / total).toFixed(0) + " %" : "-";
     }
     function groupLabel(g) {
+        if (g && g.step > 0)
+            return g.callName + " " + g.callK + " of " + g.callTotal + " \u00b7 step " + g.step + " of " + g.steps + ": " + g.stepNames[g.step - 1];
         return g ? kindLabel(g.kind) + " " + g.k + " of " + g.total : "";
+    }
+    // go to another step of the call the current group belongs to
+    function selectStep(n) {
+        const c = currentGroup;
+        if (!c || c.step === 0)
+            return;
+        for (let i = 0; i < groups.length; ++i)
+            if (groups[i].callName === c.callName && groups[i].callK === c.callK && groups[i].step === n) {
+                select(i);
+                return;
+            }
     }
 
     // open a run file (a URL; also called from the command line and by drag and drop)
@@ -198,7 +252,7 @@ ApplicationWindow {
         const out = [];
         for (let i = 0; i < groups.length; ++i) {
             select(i);
-            const base = {kind: groups[i].kind, k: groups[i].k, messages: rows.length};
+            const base = {kind: groups[i].kind, k: groups[i].k, messages: rows.length, call: groups[i].callName || "", callK: groups[i].callK || 0, step: groups[i].step || 0};
             if (!hasTree) {
                 out.push(Object.assign(base, {tree: false}));
                 continue;
@@ -309,25 +363,7 @@ ApplicationWindow {
             list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end, lost: lostByKey[key] || []});
             total[rws[0].kind] = (total[rws[0].kind] || 0) + 1;
         }
-        // keep the phases of one hierarchical all-to-all together: gather k, exchange k, scatter k
-        const phaseStart = {}, phaseSeen = {};
-        for (const g of list) {
-            const rank = phaseRank(g.kind);
-            if (rank >= 0) {
-                const seen = phaseSeen[g.k] = phaseSeen[g.k] || [false, false, false];
-                seen[rank] = true;
-                if (phaseStart[g.k] === undefined || g.start < phaseStart[g.k])
-                    phaseStart[g.k] = g.start;
-            }
-        }
-        for (const g of list) {
-            const rank = phaseRank(g.kind);
-            const seen = rank >= 0 ? phaseSeen[g.k] : undefined;
-            const complete = seen && seen[0] && seen[1] && seen[2];
-            g.sortStart = complete ? phaseStart[g.k] : g.start;
-            g.sortRank = complete ? rank : -1;
-        }
-        list.sort((a, b) => a.sortStart - b.sortStart || a.sortRank - b.sortRank);
+        linkCalls(list);                                       // the steps of one call stay together, in the order of the algorithm
         for (const g of list)
             g.total = total[g.kind];
         let bytes = 0, parcels = 0;
@@ -1024,6 +1060,19 @@ ApplicationWindow {
                     ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groupSpan) + " in total"
                     : ""
             }
+            // a group that is a step of a larger call: the other steps of the same call
+            Label { color: "#ffb74d"; text: "same call:"; visible: !!hpxWindow.currentGroup && hpxWindow.currentGroup.step > 0 }
+            Repeater {
+                model: hpxWindow.currentGroup && hpxWindow.currentGroup.step > 0 ? hpxWindow.currentGroup.stepNames : []
+                delegate: Button {
+                    required property var modelData
+                    required property int index
+                    text: (index + 1) + " " + modelData
+                    checkable: true
+                    checked: !!hpxWindow.currentGroup && hpxWindow.currentGroup.step === index + 1
+                    onClicked: hpxWindow.selectStep(index + 1)
+                }
+            }
             Item { Layout.fillWidth: true }
         }
 
@@ -1192,6 +1241,20 @@ ApplicationWindow {
                         const h = Math.max(3, Math.sqrt((g.end - g.start) / longest) * (height - 14));
                         ctx.fillStyle = i === hpxWindow.current ? "#ffffff" : (g.kind === "burst" ? "#6b6b6b" : "#6fa8dc");
                         ctx.fillRect(pad + i * bw + 1, height - 6 - h, Math.max(bw - 2, 1), h);
+                    }
+                    // the steps of one call are joined by a line under their bars
+                    ctx.strokeStyle = "#ffb74d"; ctx.lineWidth = 2;
+                    for (let i = 0; i < n; ++i) {
+                        const g = hpxWindow.groups[i];
+                        if (g.step !== 1)
+                            continue;
+                        const last = i + g.steps - 1;
+                        if (last >= n || hpxWindow.groups[last].callName !== g.callName || hpxWindow.groups[last].callK !== g.callK)
+                            continue;
+                        const x0 = pad + i * bw + 1, x1 = pad + (last + 1) * bw - 1;
+                        ctx.beginPath();
+                        ctx.moveTo(x0, height - 5); ctx.lineTo(x0, height - 2); ctx.lineTo(x1, height - 2); ctx.lineTo(x1, height - 5);
+                        ctx.stroke();
                     }
                 }
                 MouseArea {
