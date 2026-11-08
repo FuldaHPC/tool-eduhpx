@@ -1,5 +1,5 @@
 # eduhpx_run_csv 1
-# run=allgather_hier_16loc_4nodes localities=16 nodes=4 grouping=collectives_and_bursts
+# run=allgather_hier_16loc_4nodes localities=16 nodes=4 grouping=collectives_and_bursts locality_nodes=compute-00,compute-00,compute-00,compute-00,compute-01,compute-01,compute-01,compute-01,compute-02,compute-02,compute-02,compute-02,compute-03,compute-03,compute-03,compute-03
 msg,src,dst,size,group_kind,group,action,chunk,hpx_create,mpi_send_start,mpi_send_end,mpi_send_done,mpi_recv_start,mpi_recv_end,hpx_send_event,hpx_recv,hpx_done
 0000000500000000:0000000000000034,4,0,244,barrier,1,hpx::collectives::detail::communicator_server::communication_get_direct_action<hpx::traits::communication::barrier_tag; hpx::future<void>>,0,1793912701227608.25,1793912701227634,1793912701227637.25,-1,1793912701226009.5,1793912701227658,1793912701227640.25,1793912701227701,1793912701227893
 0000001000000000:0000000000000034,15,0,244,barrier,1,hpx::collectives::detail::communicator_server::communication_get_direct_action<hpx::traits::communication::barrier_tag; hpx::future<void>>,0,1793912701227922.5,1793912701227949,1793912701227953.5,-1,1793912701226353,1793912701228140,1793912701227957.5,1793912701228177,1793912701228249

@@ -24,7 +24,8 @@ void wait(int ms)
 }
 
 // Headless preview: eduhpx run.csv --render out_dir kind:k:view ...   (QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software)
-// writes one PNG per "kind:k:view", e.g. broadcast:3:tree burst:9:locality (view: locality | message | tree).
+// writes one PNG per "kind:k:view", e.g. broadcast:3:tree burst:9:locality (view: locality | message | tree | tree3d;
+// tree3d needs a real graphics window: not QT_QPA_PLATFORM=offscreen with the software backend).
 int render(QQuickWindow *window, QObject *root, const QString &dir, const QStringList &specs)
 {
     QDir().mkpath(dir);

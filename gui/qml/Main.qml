@@ -93,6 +93,28 @@ ApplicationWindow {
     // the group that is shown; null while the list of groups and the index are out of step (a new file, the start page)
     readonly property var currentGroup: current >= 0 && current < groups.length ? groups[current] : null
     readonly property real groupSpan: currentGroup ? currentGroup.end - currentGroup.start : 0
+    // the node (host) of every locality, from "locality_nodes" in the header of the run file; without it the localities are
+    // assumed to be spread evenly over the nodes (block order, as mpirun --map-by ppr does)
+    readonly property var hostInfo: {
+        const meta = run.meta || {};
+        const of = [], names = [];
+        const given = meta.locality_nodes ? String(meta.locality_nodes).split(",") : [];
+        if (given.length > 0) {
+            for (let i = 0; i < given.length; ++i) {
+                let h = names.indexOf(given[i]);
+                if (h < 0) { names.push(given[i] === "?" ? "unknown node" : given[i]); h = names.length - 1; }
+                of.push(h);
+            }
+            return { of: of, names: names, assumed: false };
+        }
+        const L = parseInt(meta.localities) || 1, N = Math.max(parseInt(meta.nodes) || 1, 1);
+        const per = Math.max(Math.ceil(L / N), 1);
+        for (let i = 0; i < L; ++i)
+            of.push(Math.floor(i / per));
+        for (let h = 0; h <= of[of.length - 1]; ++h)
+            names.push("node " + (h + 1) + " (assumed)");
+        return { of: of, names: names, assumed: true };
+    }
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
     property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
@@ -501,7 +523,7 @@ ApplicationWindow {
         hoverIndex = -1;
         buildLanes();
         buildBroadcastModel();
-        if (viewMode === "tree" && !hasTree)
+        if ((viewMode === "tree" || viewMode === "tree3d") && !hasTree)
             viewMode = "locality";
         strip.requestPaint();
         waterfall.requestPaint();
@@ -1274,6 +1296,7 @@ ApplicationWindow {
             Button { text: "By locality"; checkable: true; checked: hpxWindow.viewMode === "locality"; onClicked: { hpxWindow.viewMode = "locality"; lanes.requestPaint(); } }
             Button { text: "By message"; checkable: true; checked: hpxWindow.viewMode === "message"; onClicked: { hpxWindow.viewMode = "message"; waterfall.requestPaint(); } }
             Button { text: "Tree"; visible: hpxWindow.hasTree; checkable: true; checked: hpxWindow.viewMode === "tree"; onClicked: { hpxWindow.viewMode = "tree"; tree.requestPaint(); } }
+            Button { text: "3D tree"; visible: hpxWindow.hasTree; checkable: true; checked: hpxWindow.viewMode === "tree3d"; onClicked: hpxWindow.viewMode = "tree3d" }
             Button { text: "Reset zoom"; onClicked: hpxWindow.select(hpxWindow.current) }
             Button {
                 text: "Critical path"
@@ -1719,6 +1742,36 @@ ApplicationWindow {
                             tree.requestPaint();
                         }
                     }
+                }
+            }
+
+            // ---------------------------------------------------------------- view 4: the tree in 3D, with the nodes of the cluster
+            // loaded only when it is asked for: it needs Qt Quick 3D and a graphics card; if that is missing only this view is lost
+            Loader {
+                id: tree3d
+                anchors.fill: parent
+                active: hpxWindow.viewMode === "tree3d" && hpxWindow.hasTree
+                visible: hpxWindow.viewMode === "tree3d"
+                source: "Tree3D.qml"
+                onLoaded: bind()
+                function bind() {
+                    if (!item)
+                        return;
+                    item.win = hpxWindow;
+                    item.treeUp = Qt.binding(() => hpxWindow.treeUp);
+                    item.treeDepth = Qt.binding(() => hpxWindow.treeDepth);
+                    item.hostOf = Qt.binding(() => hpxWindow.hostInfo.of);
+                    item.hostNames = Qt.binding(() => hpxWindow.hostInfo.names);
+                    item.crit = Qt.binding(() => hpxWindow.criticalOn);
+                    item.pathChain = Qt.binding(() => hpxWindow.pathChain);
+                    item.edges = Qt.binding(() => hpxWindow.treeEdges);
+                    item.nodes = Qt.binding(() => hpxWindow.treeNodes);
+                }
+                Label {
+                    anchors.centerIn: parent
+                    visible: tree3d.status === Loader.Error
+                    color: "#ffb74d"
+                    text: "The 3D view is not available here (Qt Quick 3D could not be loaded). The other views work as usual."
                 }
             }
 
