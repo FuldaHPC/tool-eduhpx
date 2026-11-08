@@ -8,7 +8,7 @@ No database, no network. The tree can also be shown in 3D (needs Qt Quick 3D, se
     cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/<platform>
     cmake --build build
 
-The 3D tree needs the Qt module *Qt Quick 3D* (in the Qt installer: *Additional Libraries > Qt Quick 3D*; with `aqt`: `--modules qtquick3d`). Without it
+The 3D tree needs the Qt module *Qt Quick 3D* (in the Qt installer it is one of the additional libraries; with `aqt`: `--modules qtquick3d`). Without it
 the viewer builds and runs, and the *3D tree* button shows a note instead of the view.
 
 ## Start
