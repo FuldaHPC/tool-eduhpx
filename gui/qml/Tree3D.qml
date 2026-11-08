@@ -564,8 +564,8 @@ Item {
                 font.pixelSize: 12
                 model: [
                     {text: "send/recv ratio (per locality)", key: "ratio"},
-                    {text: "max send ratio (across all localities)", key: "send"},
-                    {text: "max recv ratio (across all localities)", key: "recv"},
+                    {text: "max send ratio (all localities)", key: "send"},
+                    {text: "max recv ratio (all localities)", key: "recv"},
                     {text: "arrival of the data", key: "arrival"}
                 ]
                 textRole: "text"

@@ -13,8 +13,8 @@ set -euo pipefail
 
 MPI_NAME=eduhpx_mpi_data-5.0.11rc1-eduhpx1
 MPI_TARBALL_SHA256=64e1324acf5888861e042e5ad05afc351cf6ed2d5a75d667cf0322d01d5fa1d3
-# The tarball is not published as a download yet: until it is, give it with --tarball FILE. This is where it will be.
-MPI_URL=https://github.com/AnnaLena77/EduMPI/releases/download/eduhpx-mpi-5.0.11rc1-eduhpx1/${MPI_NAME}.tar.gz
+# The tarball is a file of the EduHPX release 0.0.3 (with its .sha256). If you have it already, give it with --tarball FILE.
+MPI_URL=https://github.com/FuldaHPC/tool-eduhpx/releases/download/v0.0.3/${MPI_NAME}.tar.gz
 
 usage() {
     cat <<USAGE
@@ -102,9 +102,9 @@ case $tarball in
         if [ ! -f "$file" ] || [ "$(sha256 "$file")" != "$sha_expected" ]; then
             info "downloading $tarball"
             if command -v curl >/dev/null 2>&1; then
-                curl -fsSL -o "$file.part" "$tarball" || { rm -f "$file.part"; die "download failed. The tarball may not be published yet: if you have the file, use --tarball FILE"; }
+                curl -fsSL -o "$file.part" "$tarball" || { rm -f "$file.part"; die "download failed (internet access? the file is part of the EduHPX release 0.0.3). If you have the tarball, use --tarball FILE"; }
             elif command -v wget >/dev/null 2>&1; then
-                wget -q -O "$file.part" "$tarball" || { rm -f "$file.part"; die "download failed. The tarball may not be published yet: if you have the file, use --tarball FILE"; }
+                wget -q -O "$file.part" "$tarball" || { rm -f "$file.part"; die "download failed (internet access? the file is part of the EduHPX release 0.0.3). If you have the tarball, use --tarball FILE"; }
             else
                 die "neither curl nor wget found (or give the tarball as a file with --tarball FILE)"
             fi

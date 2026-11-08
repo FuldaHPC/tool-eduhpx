@@ -119,7 +119,7 @@ int main(int argc, char *argv[])
     qputenv("QML_XHR_ALLOW_FILE_READ", "1");
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("EduHPX"));
-    QGuiApplication::setApplicationVersion(QStringLiteral("0.0.2"));
+    QGuiApplication::setApplicationVersion(QStringLiteral("0.0.3"));
     QGuiApplication::setOrganizationName(QStringLiteral("EduHPX"));
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/qt/qml/EduHPX/assets/icon_256.png")));
     QQuickStyle::setStyle(QStringLiteral("Fusion"));
