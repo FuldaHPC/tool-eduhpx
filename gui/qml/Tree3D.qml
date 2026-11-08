@@ -1,10 +1,10 @@
 import QtQuick
 import QtQuick3D
 
-// The tree of a collective in 3D, with the nodes (hosts) of the cluster: every node is a slab, the localities that run on it stand
-// above it on a stilt, the height of a locality is its depth in the tree (root on top). An edge that leaves the slab of its
-// locality goes to another node: the network is between the slabs. Data = white (up: the arrow points to the parent), request
-// = orange, gold = critical path, as in the flat tree.
+// The tree of a collective in 3D, in the style of the 3D view of the EduMPI GUI: every node of the cluster is a pale glass cube,
+// the localities that run on it are small cubes inside it (a 3D grid, the number of the locality on the faces), and the
+// messages are lines between the cubes. The colour of a locality is the time at which the data reached it (green early, red
+// late; for a collective whose data moves up the tree: when the locality had the data of all its children).
 //
 // Input (set by Main.qml): nodes {loc, depth}, edges {p, c, data, req, up}, hostOf (host number of every locality), hostNames,
 // and the window for the formatting and the times. Mouse: drag = turn, wheel or pinch = zoom, double click = reset.
@@ -21,64 +21,85 @@ Item {
     property int treeDepth: 0
     property int hover: -1                // edge under the mouse
 
-    property real yaw: 28
-    property real pitch: 26
+    property real yaw: 12
+    property real pitch: 9
     property real dist: 900
-    readonly property real stepY: 70
-    readonly property real slabH: 14
 
-    // ---------------------------------------------------------------- layout
-    // hosts that carry a locality of the tree; every host: its localities (in order), the size of the slab and the position
+    // ---------------------------------------------------------------- layout (as in the EduMPI GUI: two columns of nodes, four rows)
     property var layout: computeLayout()
+    function hostOfLoc(loc) { return hostOf[loc] !== undefined ? hostOf[loc] : 0; }
     function computeLayout() {
         const byHost = {};
-        for (const n of nodes) {
-            const h = hostOf[n.loc] !== undefined ? hostOf[n.loc] : 0;
-            (byHost[h] = byHost[h] || []).push(n.loc);
-        }
+        for (const n of nodes)
+            (byHost[hostOfLoc(n.loc)] = byHost[hostOfLoc(n.loc)] || []).push(n.loc);
         const ids = Object.keys(byHost).map(Number).sort((a, b) => a - b);
-        const hosts = ids.map(h => {
-            const locs = byHost[h].sort((a, b) => a - b);
-            const r = Math.max(64, locs.length * 46 / (2 * Math.PI));
-            return {id: h, locs: locs, r: r, half: r + 50, x: 0, z: 0};
-        });
-        let sum = 0;
-        for (const h of hosts)
-            sum += 2 * h.half + 60;
-        const ring = hosts.length > 1 ? Math.max(sum / (2 * Math.PI), hosts[0].half * 1.4) : 0;
-        hosts.forEach((h, i) => {
-            const a = 2 * Math.PI * i / Math.max(hosts.length, 1) - Math.PI / 2;
-            h.x = ring * Math.cos(a);
-            h.z = ring * Math.sin(a);
+        let maxN = 1;
+        for (const id of ids)
+            maxN = Math.max(maxN, byHost[id].length);
+        const rows = Math.max(Math.ceil(Math.cbrt(maxN - 0.001)), 1);       // cubes per edge of the grid inside a node
+        const edge = Math.max(120, 38 * rows);                              // edge of the node cube
+        const cell = edge / rows, size = cell * 0.55;                       // the localities fill about half of each cell
+        const cols = Math.max(Math.min(ids.length, 2), 1), perCol = 4;
+        const dx = edge * 4.2, dy = edge * 1.75, dz = edge * 2.6;
+        const nRows = Math.max(Math.min(Math.ceil(ids.length / cols), perCol), 1), nBlocks = Math.max(Math.ceil(ids.length / (cols * perCol)), 1);
+        const hosts = ids.map((id, i) => {
+            const col = i % cols, row = Math.floor(i / cols) % perCol, block = Math.floor(i / (cols * perCol));
+            return {id: id, locs: byHost[id].sort((a, b) => a - b),
+                    x: cols > 1 ? (col - 0.5) * dx : 0, y: -(row - (nRows - 1) / 2) * dy, z: -(block - (nBlocks - 1) / 2) * dz};
         });
         const pos = {};
-        let extent = 150;
-        for (const h of hosts) {
+        for (const h of hosts)
             h.locs.forEach((loc, k) => {
-                const a = 2 * Math.PI * k / h.locs.length;
-                const rr = h.locs.length > 1 ? h.r : 0;
-                const depth = (nodes.find(n => n.loc === loc) || {depth: 0}).depth;
-                pos[loc] = Qt.vector3d(h.x + rr * Math.cos(a), slabH + 38 + (treeDepth - depth) * stepY, h.z + rr * Math.sin(a));
+                const ix = k % rows, iy = Math.floor(k / rows) % rows, iz = Math.floor(k / (rows * rows));
+                pos[loc] = Qt.vector3d(h.x + (ix - (rows - 1) / 2) * cell, h.y + (iy - (rows - 1) / 2) * cell, h.z + ((rows - 1) / 2 - iz) * cell);
             });
-            extent = Math.max(extent, Math.hypot(h.x, h.z) + h.half);
-        }
-        return {hosts: hosts, pos: pos, extent: extent, height: slabH + 38 + treeDepth * stepY};
+        const width = cols > 1 ? dx + edge : edge, height = (nRows - 1) * dy + edge, depth = (nBlocks - 1) * dz + edge;
+        return {hosts: hosts, pos: pos, rows: rows, edge: edge, cell: cell, size: size, width: width, height: height, depth: depth};
     }
     onNodesChanged: { layout = computeLayout(); resetView(); }
-    onTreeDepthChanged: layout = computeLayout()
     onHostOfChanged: layout = computeLayout()
 
     function resetView() {
-        yaw = 28; pitch = 26;
-        dist = Math.max(420, layout.extent * 1.55 + layout.height * 0.7);
+        yaw = 12; pitch = 9;
+        userZoomed = false;
+        fitView();
+    }
+    // the distance at which the whole scene fills the window (the camera sees 60 degrees vertically)
+    property bool userZoomed: false
+    function fitView() {
+        if (userZoomed || view.width < 10 || view.height < 10)
+            return;
+        const half = Math.tan(30 * Math.PI / 180), aspect = view.width / Math.max(view.height, 10);
+        const w = layout.width + layout.depth * 0.35 + 60, h = layout.height + 90;      // + room for the names below the cubes
+        dist = Math.max(250, Math.max(h / 2 / half, w / 2 / (half * aspect)) * 1.12 + layout.depth / 2);
     }
     Component.onCompleted: resetView()
 
-    function hostColor(i, light) {
-        return Qt.hsla((i * 0.17 + 0.08) % 1, 0.55, light, 1);
+    // when the data reached every locality, from the start of the group (colour scale: green = first, red = last)
+    readonly property var arrival: {
+        const a = {};
+        for (const n of nodes)
+            a[n.loc] = 0;
+        if (win) {
+            for (const e of edges) {
+                const t = e.data.t1 - win.treeStart;
+                if (treeUp)
+                    a[e.p] = Math.max(a[e.p] || 0, t);       // the parent has the data of this child
+                else
+                    a[e.c] = t;
+            }
+        }
+        return a;
     }
-    function hostIndexOf(h) {            // position of a host among the drawn ones (stable colour)
-        return layout.hosts.findIndex(x => x.id === h);
+    readonly property real arrivalMax: {
+        let m = 1e-9;
+        for (const k in arrival)
+            m = Math.max(m, arrival[k]);
+        return m;
+    }
+    function heat(t) {                    // 0 = green ... 1 = red, through a dark yellow like the EduMPI GUI
+        const x = Math.max(0, Math.min(1, t));
+        return Qt.hsla((1 - x) * 0.33, 0.8, 0.45, 1);
     }
     function onPath(loc) {
         return crit && (pathChain.indexOf("L#" + loc + " ") >= 0 || pathChain.endsWith("L#" + loc));
@@ -96,20 +117,20 @@ Item {
         return Qt.quaternion(Math.cos(half), uz * s, 0, -ux * s);
     }
 
-    // a line with an optional arrow head: from a to b, shaft and cone along the way
+    // a line with an optional arrow head: from a to b
     component Bar: Node {
         id: bar
         property vector3d a
         property vector3d b
-        property real radius: 2
-        property color color: "white"
+        property real radius: 1.4
+        property color color: "black"
         property real alpha: 1
         property bool arrow: true
         property bool dashed: false
         property int edgeIndex: -1
         readonly property real len: Math.max(a.minus(b).length(), 1)
         readonly property vector3d dir: b.minus(a).times(1 / len)
-        readonly property real head: arrow ? Math.min(radius * 5 + 6, len * 0.4) : 0
+        readonly property real head: arrow ? Math.min(radius * 5 + 5, len * 0.4) : 0
         readonly property quaternion rot: root.rotationTo(dir.x, dir.y, dir.z)
         Model {
             source: "#Cylinder"
@@ -121,8 +142,8 @@ Item {
             materials: DefaultMaterial {
                 diffuseColor: bar.color
                 lighting: DefaultMaterial.NoLighting
-                opacity: bar.alpha * (bar.dashed ? 0.55 : 1)
-                blendMode: DefaultMaterial.SourceOver
+                opacity: bar.alpha * (bar.dashed ? 0.5 : 1)
+                cullMode: Material.NoCulling
             }
         }
         Model {
@@ -132,21 +153,24 @@ Item {
             pickable: true
             position: bar.b.minus(bar.dir.times(bar.head / 2))
             rotation: bar.rot
-            scale: Qt.vector3d(bar.radius * 2.6 / 50, bar.head / 100, bar.radius * 2.6 / 50)
+            scale: Qt.vector3d(bar.radius * 2.8 / 50, bar.head / 100, bar.radius * 2.8 / 50)
             materials: DefaultMaterial {
                 diffuseColor: bar.color
                 lighting: DefaultMaterial.NoLighting
                 opacity: bar.alpha
+                cullMode: Material.NoCulling
             }
         }
     }
 
     View3D {
         id: view
-        anchors.fill: parent
+        anchors { left: parent.left; right: parent.right; top: topBar.bottom; bottom: parent.bottom }
         camera: cam
+        onWidthChanged: root.fitView()
+        onHeightChanged: root.fitView()
         environment: SceneEnvironment {
-            clearColor: "#2b2b2b"
+            clearColor: "white"
             backgroundMode: SceneEnvironment.Color
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
@@ -154,7 +178,6 @@ Item {
 
         Node {
             id: rig
-            position: Qt.vector3d(0, Math.max(root.layout.height * 0.4, 40), 0)
             eulerRotation: Qt.vector3d(-root.pitch, root.yaw, 0)
             PerspectiveCamera {
                 id: cam
@@ -163,71 +186,83 @@ Item {
                 clipFar: 20000
             }
         }
-        DirectionalLight { eulerRotation: Qt.vector3d(-40, -30, 0); brightness: 1.1 }
-        DirectionalLight { eulerRotation: Qt.vector3d(30, 150, 0); brightness: 0.5 }
+        DirectionalLight {
+            eulerRotation: Qt.vector3d(250, -30, 0)
+            brightness: 0.8
+            ambientColor: "#7f7f7f"
+        }
 
-        // the nodes: a slab each, with a floor grid-like border
+        // the nodes: a pale glass cube each
         Repeater3D {
             model: root.layout.hosts
-            delegate: Node {
-                required property var modelData
-                required property int index
-                position: Qt.vector3d(modelData.x, 0, modelData.z)
-                Model {
-                    source: "#Cube"
-                    position: Qt.vector3d(0, root.slabH / 2, 0)
-                    scale: Qt.vector3d(modelData.half * 2 / 100, root.slabH / 100, modelData.half * 2 / 100)
-                    materials: DefaultMaterial { diffuseColor: root.hostColor(index, 0.28) }
-                }
-            }
-        }
-
-        // a stilt from the slab to every locality, in the colour of the node
-        Repeater3D {
-            model: root.nodes
             delegate: Model {
                 required property var modelData
-                readonly property vector3d p: root.layout.pos[modelData.loc] || Qt.vector3d(0, 0, 0)
-                readonly property real h: Math.max(p.y - root.slabH, 1)
-                source: "#Cylinder"
-                position: Qt.vector3d(p.x, root.slabH + h / 2, p.z)
-                scale: Qt.vector3d(0.03, h / 100, 0.03)
+                source: "#Cube"
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
+                scale: Qt.vector3d(root.layout.edge / 100, root.layout.edge / 100, root.layout.edge / 100)
                 materials: DefaultMaterial {
-                    diffuseColor: root.hostColor(root.hostIndexOf(root.hostOf[modelData.loc] !== undefined ? root.hostOf[modelData.loc] : 0), 0.62)
-                    lighting: DefaultMaterial.NoLighting
-                    opacity: 0.8
+                    diffuseColor: "#d9d9d9"
+                    opacity: 0.16
+                    cullMode: Material.NoCulling
+                    depthDrawMode: Material.NeverDepthDraw
                 }
             }
         }
 
-        // the localities
+        // the localities: a cube each, coloured by the arrival of the data, the number on the faces
         Repeater3D {
             model: root.nodes
             delegate: Node {
                 required property var modelData
                 readonly property vector3d p: root.layout.pos[modelData.loc] || Qt.vector3d(0, 0, 0)
                 readonly property bool path: root.onPath(modelData.loc)
-                readonly property int hi: root.hostIndexOf(root.hostOf[modelData.loc] !== undefined ? root.hostOf[modelData.loc] : 0)
+                readonly property real k: root.layout.size / 100
                 position: p
                 Model {
-                    source: "#Sphere"
-                    scale: Qt.vector3d(0.26, 0.26, 0.26).times(modelData.depth === 0 ? 1.3 : 1)
-                    materials: DefaultMaterial { diffuseColor: root.hostColor(hi, 0.58) }
-                }
-                Model {                                   // a gold shell around the localities of the critical path
-                    visible: path
-                    source: "#Sphere"
-                    scale: Qt.vector3d(0.36, 0.36, 0.36).times(modelData.depth === 0 ? 1.3 : 1)
+                    source: "#Cube"
+                    scale: Qt.vector3d(k, k, k)
                     materials: DefaultMaterial {
-                        diffuseColor: "#ffd600"
+                        diffuseColor: root.heat((root.arrival[modelData.loc] || 0) / root.arrivalMax)
+                        opacity: 0.72
+                        depthDrawMode: Material.AlwaysDepthDraw
+                    }
+                }
+                Model {                                   // the number of the locality
+                    source: "#Cube"
+                    scale: Qt.vector3d(k * 1.003, k * 1.003, k * 1.003)
+                    materials: DefaultMaterial {
                         lighting: DefaultMaterial.NoLighting
-                        opacity: 0.45
+                        diffuseMap: Texture {
+                            sourceItem: Rectangle {
+                                width: 128; height: 128
+                                color: "transparent"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: String(modelData.loc)
+                                    color: "black"
+                                    font.pixelSize: modelData.loc > 99 ? 50 : 72
+                                    font.bold: true
+                                }
+                            }
+                        }
+                        cullMode: Material.NoCulling
+                    }
+                }
+                Model {                                   // a gold frame around the localities of the critical path
+                    visible: path
+                    source: "#Cube"
+                    scale: Qt.vector3d(k * 1.18, k * 1.18, k * 1.18)
+                    materials: DefaultMaterial {
+                        diffuseColor: "#ffc400"
+                        lighting: DefaultMaterial.NoLighting
+                        opacity: 0.35
+                        depthDrawMode: Material.NeverDepthDraw
                     }
                 }
             }
         }
 
-        // the edges: data (thick) and request (thin) next to each other
+        // the edges: data (thicker) and request (thin) next to each other
         Repeater3D {
             model: root.edges
             delegate: Node {
@@ -240,21 +275,22 @@ Item {
                 // sideways offset of the request line, perpendicular to the edge and to the vertical
                 readonly property vector3d side: {
                     const s = Qt.vector3d(-d.z, 0, d.x);
-                    return s.length() > 0.001 ? s.normalized().times(6) : Qt.vector3d(6, 0, 0);
+                    return s.length() > 0.001 ? s.normalized().times(root.layout.size * 0.14) : Qt.vector3d(root.layout.size * 0.14, 0, 0);
                 }
                 readonly property bool hot: root.hover === index
                 readonly property bool onPath: root.crit && modelData.data.crit
-                readonly property real alpha: (hot || onPath || !root.crit) ? 1 : 0.3
-                readonly property real r0: 13        // the sphere
+                readonly property real alpha: (hot || onPath || !root.crit) ? 1 : 0.22
+                readonly property real r0: root.layout.size * 0.5
                 readonly property vector3d u: d.times(1 / Math.max(d.length(), 1))
-                // the lines start and end at the surface of the spheres
+                // the lines start and end at the surface of the cubes
                 readonly property vector3d s0: pa.plus(u.times(r0))
                 readonly property vector3d s1: pc.minus(u.times(r0))
+                readonly property real wData: root.layout.size * (0.05 + Math.min(Math.sqrt(modelData.data.size) / 150, 2) * 0.012)
                 Bar {
                     a: modelData.up ? edgeNode.s1.plus(edgeNode.side.times(-0.5)) : edgeNode.s0.plus(edgeNode.side.times(-0.5))
                     b: modelData.up ? edgeNode.s0.plus(edgeNode.side.times(-0.5)) : edgeNode.s1.plus(edgeNode.side.times(-0.5))
-                    radius: (2 + Math.min(Math.sqrt(modelData.data.size) / 150, 2)) * (edgeNode.hot || edgeNode.onPath ? 1.4 : 1)
-                    color: edgeNode.hot ? "#ff4081" : (edgeNode.onPath ? "#ffd600" : "#ffffff")
+                    radius: edgeNode.wData * (edgeNode.hot || edgeNode.onPath ? 1.5 : 1)
+                    color: edgeNode.hot ? "#ff4081" : (edgeNode.onPath ? "#e0a800" : "#1f1f1f")
                     alpha: edgeNode.alpha
                     dashed: modelData.data.missing === true
                     edgeIndex: edgeNode.index
@@ -263,8 +299,8 @@ Item {
                     visible: modelData.req !== undefined && modelData.req !== null
                     a: modelData.up ? edgeNode.s0.plus(edgeNode.side.times(0.5)) : edgeNode.s1.plus(edgeNode.side.times(0.5))
                     b: modelData.up ? edgeNode.s1.plus(edgeNode.side.times(0.5)) : edgeNode.s0.plus(edgeNode.side.times(0.5))
-                    radius: 1.2 * (edgeNode.hot || edgeNode.onPath ? 1.5 : 1)
-                    color: edgeNode.hot ? "#ff4081" : (edgeNode.onPath ? "#ffd600" : "#ffb74d")
+                    radius: edgeNode.wData * 0.45 * (edgeNode.hot || edgeNode.onPath ? 1.5 : 1)
+                    color: edgeNode.hot ? "#ff4081" : (edgeNode.onPath ? "#e0a800" : "#fb8c00")
                     alpha: edgeNode.alpha
                     dashed: modelData.req ? modelData.req.missing === true : false
                     edgeIndex: edgeNode.index
@@ -273,54 +309,67 @@ Item {
         }
     }
 
-    // labels in 2D on top of the scene: L#n above every locality, the name below every slab
-    Repeater {
-        model: root.nodes
-        delegate: Text {
-            required property var modelData
-            readonly property vector3d p: {
-                root.yaw; root.pitch; root.dist; view.width; view.height;
-                const q = root.layout.pos[modelData.loc] || Qt.vector3d(0, 0, 0);
-                return view.mapFrom3DScene(q.plus(Qt.vector3d(0, 24, 0)));
-            }
-            // many localities: only the root, the critical path and the ends of the edge under the mouse carry a label
-            readonly property bool wanted: root.nodes.length <= 24 || modelData.depth === 0 || root.onPath(modelData.loc)
-                || (root.hover >= 0 && root.hover < root.edges.length && (root.edges[root.hover].p === modelData.loc || root.edges[root.hover].c === modelData.loc))
-            visible: p.z > 0 && wanted
-            x: p.x - width / 2
-            y: p.y - height
-            text: "L#" + modelData.loc
-            color: root.onPath(modelData.loc) ? "#ffd600" : "#ffffff"
-            font.pixelSize: 12
-            font.bold: true
-        }
-    }
+    // the name of every node, below its cube
     Repeater {
         model: root.layout.hosts
         delegate: Text {
             required property var modelData
-            required property int index
             readonly property vector3d p: {
                 root.yaw; root.pitch; root.dist; view.width; view.height;
-                return view.mapFrom3DScene(Qt.vector3d(modelData.x, 0, modelData.z + modelData.half + 6));
+                return view.mapFrom3DScene(Qt.vector3d(modelData.x, modelData.y - root.layout.edge * 0.62, modelData.z));
             }
             visible: p.z > 0
             x: p.x - width / 2
-            y: p.y
+            y: p.y + topBar.height
             text: (root.hostNames[modelData.id] || ("node " + (modelData.id + 1))) + "  (" + modelData.locs.length + ")"
-            color: root.hostColor(index, 0.72)
+            color: "#444444"
             font.pixelSize: 13
             font.bold: true
+        }
+    }
+
+    // bar at the top as in the EduMPI GUI: heading and colour scale
+    Rectangle {
+        id: topBar
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        height: 46
+        color: "#9e9e9e"
+        Text {
+            x: 14; anchors.verticalCenter: parent.verticalCenter
+            color: "white"
+            font.pixelSize: 16
+            font.bold: true
+            text: "3D Cluster View: " + (root.treeUp ? "when the node had the data of all its children" : "arrival of the data")
+        }
+        Row {
+            anchors { right: parent.right; rightMargin: 16; verticalCenter: parent.verticalCenter }
+            spacing: 8
+            Text { color: "white"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter; text: "start" }
+            Rectangle {
+                width: 220; height: 14; radius: 2
+                anchors.verticalCenter: parent.verticalCenter
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: root.heat(0) }
+                    GradientStop { position: 0.35; color: root.heat(0.35) }
+                    GradientStop { position: 0.7; color: root.heat(0.7) }
+                    GradientStop { position: 1.0; color: root.heat(1) }
+                }
+            }
+            Text {
+                color: "white"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter
+                text: root.win ? "+" + root.win.fmtUs(root.arrivalMax) : ""
+            }
         }
     }
 
     // the edge under the mouse
     Rectangle {
         visible: root.hover >= 0 && root.hover < root.edges.length
-        x: 14; y: 12
+        x: 14; y: topBar.height + 10
         width: info.width + 16; height: info.height + 10
         radius: 4
-        color: "#cc202020"
+        color: "#dd303030"
         Text {
             id: info
             x: 8; y: 5
@@ -341,17 +390,16 @@ Item {
     }
     Text {
         x: 14; anchors.bottom: parent.bottom; anchors.bottomMargin: 12
-        color: "#999999"
+        color: "#777777"
         font.pixelSize: 11
-        text: "slab = node, stilt = locality on it, height = depth in the tree   white: data   orange: request   gold: critical path   "
+        text: "glass cube = node, small cube = locality (its number), colour = arrival of the data   black: data   orange: request   gold: critical path   "
               + "drag: turn   wheel or pinch: zoom   double click: reset"
     }
 
     // ---------------------------------------------------------------- mouse
     HoverHandler {
-        id: hoverer
         onPointChanged: {
-            const r = view.pick(point.position.x, point.position.y);
+            const r = view.pick(point.position.x, point.position.y - topBar.height);
             root.hover = r.objectHit && r.objectHit.edgeIndex !== undefined ? r.objectHit.edgeIndex : -1;
         }
         onHoveredChanged: if (!hovered) root.hover = -1
@@ -362,21 +410,24 @@ Item {
         property real lastY: 0
         onActiveChanged: { lastX = 0; lastY = 0; }
         onTranslationChanged: {
+            root.userZoomed = true;
             root.yaw -= (translation.x - lastX) * 0.4;
-            root.pitch = Math.max(-80, Math.min(85, root.pitch + (translation.y - lastY) * 0.4));
+            root.pitch = Math.max(-85, Math.min(85, root.pitch + (translation.y - lastY) * 0.4));
             lastX = translation.x; lastY = translation.y;
         }
     }
     WheelHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        onWheel: (e) => root.dist = Math.max(120, Math.min(8000, root.dist * Math.pow(0.9985, e.angleDelta.y)))
+        onWheel: (e) => {
+            root.userZoomed = true;
+            root.dist = Math.max(120, Math.min(12000, root.dist * Math.pow(0.9985, e.angleDelta.y)));
+        }
     }
     PinchHandler {
-        id: pinch
         target: null
         property real start: 1
-        onActiveChanged: if (active) start = root.dist
-        onActiveScaleChanged: if (active) root.dist = Math.max(120, Math.min(8000, start / Math.max(activeScale, 0.05)))
+        onActiveChanged: if (active) { start = root.dist; root.userZoomed = true; }
+        onActiveScaleChanged: if (active) root.dist = Math.max(120, Math.min(12000, start / Math.max(activeScale, 0.05)))
     }
     TapHandler { onDoubleTapped: root.resetView() }
 }
