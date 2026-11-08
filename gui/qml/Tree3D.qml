@@ -552,9 +552,6 @@ Item {
                 color: "transparent"; border.color: "#888888"
                 Text { anchors.centerIn: parent; text: "i"; color: "#777777"; font.pixelSize: 10; font.bold: true }
                 MouseArea { id: infoArea; anchors.fill: parent; hoverEnabled: true }
-                ToolTip.visible: infoArea.containsMouse
-                ToolTip.delay: 200
-                ToolTip.text: root.modeTips[root.mode]
             }
         }
         Row {
@@ -621,6 +618,33 @@ Item {
                     return root.win ? "+" + root.win.fmtUs(root.arrivalMax) : "";
                 }
             }
+        }
+    }
+
+    // what the colours mean, shown while the mouse is on the (i): a solid card below the bar
+    Rectangle {
+        id: modeTip
+        visible: infoArea.containsMouse
+        z: 5
+        x: {
+            infoArea.containsMouse;
+            return Math.max(8, Math.min(root.width - width - 8, infoDot.mapToItem(root, 0, 0).x - 14));
+        }
+        y: topBar.height + 6
+        width: modeTipText.width + 28
+        height: modeTipText.height + 20
+        radius: 8
+        color: "#262626"
+        border.color: "#555555"
+        Text {
+            id: modeTipText
+            x: 14; y: 10
+            width: Math.min(440, root.width - 60)
+            color: "white"
+            font.pixelSize: 13
+            lineHeight: 1.15
+            wrapMode: Text.WordWrap
+            text: root.modeTips[root.mode]
         }
     }
 
