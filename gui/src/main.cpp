@@ -61,6 +61,17 @@ int render(QQuickWindow *window, QObject *root, const QString &dir, const QStrin
                 std::printf("SCROLL step %d scrollY=%f contentH=%f\n", i, root->property("scrollY").toDouble(), root->property("contentH").toDouble());
             }
         }
+        if (!qEnvironmentVariable("EDUHPX_HOVER").isEmpty()) {     // test: mouse pointer at "x,y" (window coordinates), e.g. over a line of the 3D tree
+            const QStringList xy = qEnvironmentVariable("EDUHPX_HOVER").split(QLatin1Char(','));
+            if (xy.size() == 2) {
+                const QPointF pos(xy[0].toDouble(), xy[1].toDouble());
+                for (int i = 0; i < 3; ++i) {
+                    QMouseEvent move(QEvent::MouseMove, pos + QPointF(i, 0), window->mapToGlobal(pos.toPoint()), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                    QCoreApplication::sendEvent(window, &move);
+                    wait(150);
+                }
+            }
+        }
         const QString file = QDir(dir).filePath(part[0] + part[1] + QLatin1Char('_') + part[2] + QLatin1String(".png"));
         const QImage image = window->grabWindow();
         if (image.isNull() || !image.save(file)) {

@@ -25,6 +25,8 @@ Item {
     property bool treeUp: false
     property int treeDepth: 0
     property int hover: -1                // edge under the mouse
+    property real mouseX: 0               // where the mouse is, for the box that shows the edge
+    property real mouseY: 0
 
     property string mode: "ratio"         // ratio | send | recv | arrival
     property bool showSend: true
@@ -188,7 +190,7 @@ Item {
         property int edgeIndex: -1
         readonly property real len: Math.max(a.minus(b).length(), 1)
         readonly property vector3d dir: b.minus(a).times(1 / len)
-        readonly property real head: arrow ? Math.min(radius * 5 + 5, len * 0.4) : 0
+        readonly property real head: arrow ? Math.min(radius * 4 + 3, len * 0.35) : 0
         readonly property quaternion rot: root.rotationTo(dir.x, dir.y, dir.z)
         Model {
             source: "#Cylinder"
@@ -204,6 +206,20 @@ Item {
                 cullMode: Material.NoCulling
             }
         }
+        Model {                                  // an invisible, wider line: thin lines are hard to hit with the mouse
+            source: "#Cylinder"
+            pickable: true
+            property int edgeIndex: bar.edgeIndex
+            position: bar.a.plus(bar.dir.times(bar.len / 2))
+            rotation: bar.rot
+            scale: Qt.vector3d(Math.max(bar.radius * 3, 3.5) / 50, bar.len / 100, Math.max(bar.radius * 3, 3.5) / 50)
+            materials: DefaultMaterial {
+                diffuseColor: "white"
+                lighting: DefaultMaterial.NoLighting
+                opacity: 0.0
+                depthDrawMode: Material.NeverDepthDraw
+            }
+        }
         Model {
             visible: bar.arrow
             source: "#Cone"
@@ -211,7 +227,7 @@ Item {
             pickable: true
             position: bar.b.minus(bar.dir.times(bar.head / 2))
             rotation: bar.rot
-            scale: Qt.vector3d(bar.radius * 2.8 / 50, bar.head / 100, bar.radius * 2.8 / 50)
+            scale: Qt.vector3d(bar.radius * 2.3 / 50, bar.head / 100, bar.radius * 2.3 / 50)
             materials: DefaultMaterial {
                 diffuseColor: bar.color
                 lighting: DefaultMaterial.NoLighting
@@ -298,7 +314,7 @@ Item {
                                     anchors.centerIn: parent
                                     text: String(modelData.loc)
                                     color: "black"
-                                    font.pixelSize: modelData.loc > 99 ? 50 : 72
+                                    font.pixelSize: modelData.loc > 99 ? 32 : 44
                                     font.bold: true
                                 }
                             }
@@ -349,8 +365,8 @@ Item {
                 readonly property bool up: modelData.up === true
                 readonly property vector3d dFrom: up ? s1 : s0
                 readonly property vector3d dTo: up ? s0 : s1
-                readonly property real wData: root.layout.size * (0.05 + Math.min(Math.sqrt(modelData.data.size) / 150, 2) * 0.012) * (hot || onPath ? 1.5 : 1)
-                readonly property real wReq: root.layout.size * 0.03 * (hot || onPath ? 1.5 : 1)
+                readonly property real wData: root.layout.size * (0.032 + Math.min(Math.sqrt(modelData.data.size) / 150, 2) * 0.007) * (hot || onPath ? 1.15 : 1)
+                readonly property real wReq: root.layout.size * 0.02 * (hot || onPath ? 1.15 : 1)
                 readonly property bool hasReq: modelData.req !== undefined && modelData.req !== null
                 readonly property color sendColor: hot ? "#ff4081" : "#00c853"
                 readonly property color recvColor: hot ? "#ff4081" : "#e53935"
@@ -360,7 +376,7 @@ Item {
                     visible: edgeNode.onPath
                     a: edgeNode.dFrom.plus(edgeNode.side.times(edgeNode.unit * 0.8))
                     b: edgeNode.dTo.plus(edgeNode.side.times(edgeNode.unit * 0.8))
-                    radius: edgeNode.unit * 4.2
+                    radius: edgeNode.unit * 3.2
                     arrow: false
                     color: "#ffc400"
                     alpha: 0.35
@@ -525,8 +541,11 @@ Item {
 
     // the edge under the mouse
     Rectangle {
+        id: infoBox
         visible: root.hover >= 0 && root.hover < root.edges.length
-        x: 14; y: topBar.height + 10
+        // next to the pointer, to the right and below it; to the left or above if there is no room
+        x: root.mouseX + 18 + width > root.width - 8 ? root.mouseX - 18 - width : root.mouseX + 18
+        y: root.mouseY + 18 + height > root.height - 8 ? root.mouseY - 18 - height : root.mouseY + 18
         width: info.width + 16; height: info.height + 10
         radius: 4
         color: "#dd303030"
@@ -560,6 +579,8 @@ Item {
     // ---------------------------------------------------------------- mouse
     HoverHandler {
         onPointChanged: {
+            root.mouseX = point.position.x;
+            root.mouseY = point.position.y;
             const r = view.pick(point.position.x, point.position.y - topBar.height);
             root.hover = r.objectHit && r.objectHit.edgeIndex !== undefined ? r.objectHit.edgeIndex : -1;
         }
