@@ -7,8 +7,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2)
-# the 3D view of the tree (qml/Tree3D.qml) needs Qt Quick 3D; without it the program is built and shows a note in that view
-find_package(Qt6 6.5 QUIET OPTIONAL_COMPONENTS Quick3D)
+# the 3D view of the tree (qml/Tree3D.qml) needs Qt Quick 3D (and Qt Shader Tools, which it depends on). Without them the program is
+# built and shows a note in that view. The release builds switch EDUHPX_REQUIRE_QUICK3D on, so that a missing module stops the build
+# instead of giving a program without the 3D view.
+option(EDUHPX_REQUIRE_QUICK3D "stop if Qt Quick 3D is not found" OFF)
+if(EDUHPX_REQUIRE_QUICK3D)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Quick3D)
+else()
+    find_package(Qt6 6.5 QUIET OPTIONAL_COMPONENTS Quick3D)
+endif()
+if(NOT TARGET Qt6::Quick3D)
+    message(WARNING "Qt Quick 3D was not found: the 3D tree view will not be available (install the Qt modules Qt Quick 3D and Qt Shader Tools)")
+endif()
 
 qt_standard_project_setup(REQUIRES 6.5)
 
