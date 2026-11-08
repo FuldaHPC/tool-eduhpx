@@ -68,6 +68,28 @@ Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once
 **Status (2026-11-05):** the viewer is released (0.0.2). The whole chain from a program to `run.csv` was tested on one
 cluster (4 nodes, 16 localities, flat and hierarchical broadcast); macOS and runs without Slurm are not tested yet.
 
+## Overhead
+
+Measuring is not free: the measuring MPI and the parcel log slow the program down a little, so use it to *understand* a run,
+not to time it. What we measured (HPX broadcast of 64 KiB, 1000 per run, 4 localities on one node, 10 interleaved runs per
+variant, compared with stock Open MPI; this is a worst case, because the program does nothing but communicate):
+
+| Variant | Time per broadcast vs stock Open MPI |
+|---|---|
+| Measuring MPI only (current version), flat broadcast | +9 % |
+| Measuring MPI only (current version), hierarchical broadcast | +7 % |
+| Patched HPX, parcel log off, with the measuring MPI (previous version of the measuring MPI) | +31 to +33 % |
+| Patched HPX, parcel log on, with the measuring MPI (previous version of the measuring MPI) | +41 to +42 % |
+
+- The cost of the measuring MPI comes from the memory traffic of its event records (one record per MPI call), not from extra
+  computation. The current version keeps the records small and reuses its buffers, which is why it is about 3 points cheaper
+  than the version before.
+- The messages themselves are not changed: sizes, order and content are the same as without measuring. But every message
+  takes a little longer, so the time stamps show a run that is a few percent slower than the same program without EduHPX.
+- A program that computes between its messages loses a smaller share than these numbers. We have not measured that yet.
+- The last two rows still use the previous version of the measuring MPI; they have not been measured again with the current one.
+- Do not attach the Tracy profiler for this: a connected Tracy capture slows an HPX program down by a factor of 10 to 25.
+
 ## Screenshots
 
 | Hierarchical broadcast | Tree of the broadcast |
