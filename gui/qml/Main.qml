@@ -115,6 +115,9 @@ ApplicationWindow {
             names.push("node " + (h + 1) + " (assumed)");
         return { of: of, names: names, assumed: true };
     }
+    property string tree3dMode: "ratio"  // colours of the 3D tree: ratio | send | recv | arrival
+    property bool tree3dSend: true       // lines of the 3D tree
+    property bool tree3dRecv: true
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
     property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
@@ -1757,6 +1760,9 @@ ApplicationWindow {
                 function bind() {
                     if (!item)
                         return;
+                    item.mode = hpxWindow.tree3dMode;
+                    item.showSend = hpxWindow.tree3dSend;
+                    item.showRecv = hpxWindow.tree3dRecv;
                     item.win = hpxWindow;
                     item.treeUp = Qt.binding(() => hpxWindow.treeUp);
                     item.treeDepth = Qt.binding(() => hpxWindow.treeDepth);
