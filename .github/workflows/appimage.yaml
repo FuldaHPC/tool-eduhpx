@@ -23,7 +23,7 @@ jobs:
           target: 'desktop'
           arch: 'linux_gcc_64'
           tools: 'tools_cmake'
-          modules: 'qtquick3d'      # the 3D tree
+          modules: 'qtquick3d qtshadertools'      # the 3D tree
           cache: true
 
       - name: Install system libraries
@@ -35,7 +35,7 @@ jobs:
         run: |
           set -o pipefail
           fail() { echo "::error title=build failed::$(grep -E 'error|Error|undefined|No such|not found' build.log | head -12 | sed 's/%/%25/g' | paste -sd '|' -)"; exit 1; }
-          cmake -S gui -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr 2>&1 | tee build.log || fail
+          cmake -S gui -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DEDUHPX_REQUIRE_QUICK3D=ON 2>&1 | tee build.log || fail
           cmake --build build -j$(nproc) 2>&1 | tee -a build.log || fail
 
       - name: Create AppDir with executable and examples

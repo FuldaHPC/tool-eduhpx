@@ -23,12 +23,12 @@ jobs:
           target: desktop
           arch: win64_mingw
           tools: 'tools_mingw1310 tools_cmake tools_ninja'
-          modules: 'qtquick3d'      # the 3D tree
+          modules: 'qtquick3d qtshadertools'      # the 3D tree
           cache: true
 
       - name: Configure and build
         run: |
-          cmake -G "Ninja" -S gui -B windows-build -DCMAKE_BUILD_TYPE=Release 2>&1 | Tee-Object -FilePath build.log
+          cmake -G "Ninja" -S gui -B windows-build -DCMAKE_BUILD_TYPE=Release -DEDUHPX_REQUIRE_QUICK3D=ON 2>&1 | Tee-Object -FilePath build.log
           $rc = $LASTEXITCODE
           if ($rc -eq 0) { cmake --build windows-build 2>&1 | Tee-Object -FilePath build.log -Append; $rc = $LASTEXITCODE }
           if ($rc -ne 0) {
@@ -39,7 +39,14 @@ jobs:
 
       - name: Collect the program, Qt and the examples (windeployqt)
         run: |
-          windeployqt --qmldir gui/qml --dir release windows-build/eduhpx.exe
+          $out = windeployqt --qmldir gui/qml --dir release windows-build/eduhpx.exe 2>&1 | ForEach-Object { "$_" }
+          $rc = $LASTEXITCODE
+          $out | Write-Output
+          if ($rc -ne 0) {
+            $m = ($out | Select-Object -First 8 | ForEach-Object { $_.Replace('%','%25') }) -join '|'
+            Write-Output "::error title=windeployqt failed::$m"
+            exit 1
+          }
           move windows-build/eduhpx.exe release\
           mkdir release\examples
           copy examples\*.csv release\examples\

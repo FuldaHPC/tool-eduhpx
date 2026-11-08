@@ -32,7 +32,7 @@ jobs:
           target: desktop
           arch: clang_64
           tools: tools_cmake
-          modules: qtquick3d        # the 3D tree
+          modules: 'qtquick3d qtshadertools'      # the 3D tree
           cache: true
 
       - name: Configure and build
@@ -41,7 +41,7 @@ jobs:
           set -o pipefail
           fail() { echo "::error title=build failed::$(grep -E 'error|Error|undefined|No such|not found' build.log | head -12 | sed 's/%/%25/g' | paste -sd '|' -)"; exit 1; }
           command -v ninja >/dev/null || (export HOMEBREW_NO_AUTO_UPDATE=1; brew install ninja)
-          cmake -S gui -B build -G Ninja -DCMAKE_BUILD_TYPE=Release 2>&1 | tee build.log || fail
+          cmake -S gui -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDUHPX_REQUIRE_QUICK3D=ON 2>&1 | tee build.log || fail
           cmake --build build 2>&1 | tee -a build.log || fail
 
       - name: Bundle Qt (macdeployqt) and sign ad hoc
