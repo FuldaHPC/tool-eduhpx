@@ -2,11 +2,13 @@
 
 EduHPX shows what HPX and MPI do for every message. For that it needs
 
-1. the **measuring MPI** (branch `eduhpx_mpi_data` of the EduMPI repository, as a source tarball, see [mpi_tarball.md](mpi_tarball.md); the tarball is built and tested but not published yet) and
+1. the **measuring MPI** (branch `eduhpx_mpi_data` of the EduMPI repository, as a source tarball, see [mpi_tarball.md](mpi_tarball.md); it is attached to the EduHPX release and `scripts/install-mpi.sh` downloads and builds it) and
 2. **HPX with the parcel log**, which is built by `scripts/install-hpx.sh` from this repository.
 
 HPX itself is not part of this repository. The script downloads one fixed HPX commit from GitHub, checks the checksum of the
-download, applies `patches/hpx-e65a7a3c.patch` and builds HPX against the measuring MPI.
+download, applies `patches/hpx-ec3b59b1.patch` and builds HPX against the measuring MPI.
+
+A step-by-step description from the first install to the first trace of your own program: [tracing_guide.md](tracing_guide.md).
 
 ## Install
 

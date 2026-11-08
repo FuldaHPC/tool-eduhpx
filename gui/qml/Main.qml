@@ -48,7 +48,7 @@ ApplicationWindow {
     readonly property color recvColor: "#ffb74d"         // HPX picks up: light orange
     readonly property color actionColor: "#ffe082"
 
-    property var groups: []         // { kind, k, total, rows, start, end }
+    property var groups: []         // { kind, k, total, rows, start, end, sortStart, sortRank }
     property int current: 0
     property var rows: []           // rows of the current group
     property double viewStart: 0
@@ -69,7 +69,8 @@ ApplicationWindow {
     property int runParcels: 0
     property int skipped: 0         // parcels without MPI data (not shown)
     property int hoverIndex: -1
-    property string viewMode: "locality"   // locality | message
+    property string viewMode: "locality"   // locality | message | tree | tree3d
+    readonly property bool treeView: viewMode === "tree" || viewMode === "tree3d"   // the trees need no time breakdown and no colour legend of the lanes
     property var laneInfo: []
     property var laneMsgs: []
     property int laneHover: -1
@@ -93,6 +94,31 @@ ApplicationWindow {
     // the group that is shown; null while the list of groups and the index are out of step (a new file, the start page)
     readonly property var currentGroup: current >= 0 && current < groups.length ? groups[current] : null
     readonly property real groupSpan: currentGroup ? currentGroup.end - currentGroup.start : 0
+    // the node (host) of every locality, from "locality_nodes" in the header of the run file; without it the localities are
+    // assumed to be spread evenly over the nodes (block order, as mpirun --map-by ppr does)
+    readonly property var hostInfo: {
+        const meta = run.meta || {};
+        const of = [], names = [];
+        const given = meta.locality_nodes ? String(meta.locality_nodes).split(",") : [];
+        if (given.length > 0) {
+            for (let i = 0; i < given.length; ++i) {
+                let h = names.indexOf(given[i]);
+                if (h < 0) { names.push(given[i] === "?" ? "unknown node" : given[i]); h = names.length - 1; }
+                of.push(h);
+            }
+            return { of: of, names: names, assumed: false };
+        }
+        const L = parseInt(meta.localities) || 1, N = Math.max(parseInt(meta.nodes) || 1, 1);
+        const per = Math.max(Math.ceil(L / N), 1);
+        for (let i = 0; i < L; ++i)
+            of.push(Math.floor(i / per));
+        for (let h = 0; h <= of[of.length - 1]; ++h)
+            names.push("node " + (h + 1) + " (assumed)");
+        return { of: of, names: names, assumed: true };
+    }
+    property string tree3dMode: "ratio"  // colours of the 3D tree: ratio | send | recv | arrival
+    property bool tree3dSend: true       // lines of the 3D tree
+    property bool tree3dRecv: true
     property var treeNodes: []           // { loc, depth, x }
     property var treeNodeMap: ({})
     property var treeEdges: []           // { p, c, data, req } parent p answers the request of child c with the data
@@ -175,13 +201,72 @@ ApplicationWindow {
         const t = String(kind).replace(/_/g, "-");
         return t.charAt(0).toUpperCase() + t.slice(1);
     }
+    // Some collectives are several groups of messages in a hierarchical run: the groups of one call share k (the k-th call) and
+    // are its steps. The steps overlap in time (the scatter posts its requests before the exchange has sent its data), so their
+    // start times alone do not sort them in the order of the algorithm.
+    readonly property var callDefs: [
+        {name: "All-to-all", kinds: ["gather", "all_to_all", "scatter"], steps: ["gather", "exchange", "scatter"]},
+        {name: "All-reduce", kinds: ["reduce", "broadcast"], steps: ["reduce", "broadcast"]},
+        {name: "All-gather", kinds: ["gather", "broadcast"], steps: ["gather", "broadcast"]},
+        {name: "Scan", kinds: ["gather", "scatter"], steps: ["gather", "scatter"]}
+    ]
+    // marks the groups that belong together: callName, callK, step (1..), steps, stepNames, callTotal; sorts the list
+    function linkCalls(list) {
+        const byK = {};
+        for (const g of list)
+            (byK[g.k] = byK[g.k] || {})[g.kind] = g;
+        for (const g of list) {
+            g.callName = ""; g.step = 0; g.sortStart = g.start; g.sortRank = -1;
+        }
+        const count = {};
+        for (const k of Object.keys(byK)) {
+            const here = byK[k];
+            const fit = callDefs.filter(d => d.kinds.every(kd => here[kd]));
+            const def = fit.find(d => d.name === "All-to-all") || (fit.length === 1 ? fit[0] : null);
+            if (!def)
+                continue;                                    // none, or ambiguous (for example gather, scatter and broadcast)
+            const members = def.kinds.map(kd => here[kd]);
+            // one call: the groups follow each other without a gap (a gap of more than 0.5 ms means separate calls)
+            const byStart = members.slice().sort((a, b) => a.start - b.start);
+            let reach = byStart[0].end, joined = true;
+            for (const g of byStart.slice(1)) {
+                if (g.start > reach + 500) { joined = false; break; }
+                reach = Math.max(reach, g.end);
+            }
+            if (!joined)
+                continue;
+            const first = byStart[0].start;
+            members.forEach((g, i) => {
+                g.callName = def.name; g.callK = g.k; g.step = i + 1; g.steps = def.steps.length; g.stepNames = def.steps;
+                g.sortStart = first; g.sortRank = i;
+            });
+            count[def.name] = (count[def.name] || 0) + 1;
+        }
+        for (const g of list)
+            if (g.step > 0)
+                g.callTotal = count[g.callName];
+        list.sort((a, b) => a.sortStart - b.sortStart || a.sortRank - b.sortRank);
+    }
     // share of the time of all messages of this group, as text
     function pct(v) {
         const total = sumWait + sumPre + sumMpi + sumPick + sumParent + sumAction;
         return total > 0 ? (100 * v / total).toFixed(0) + " %" : "-";
     }
     function groupLabel(g) {
+        if (g && g.step > 0)
+            return g.callName + " " + g.callK + " of " + g.callTotal + " \u00b7 step " + g.step + " of " + g.steps + ": " + g.stepNames[g.step - 1];
         return g ? kindLabel(g.kind) + " " + g.k + " of " + g.total : "";
+    }
+    // go to another step of the call the current group belongs to
+    function selectStep(n) {
+        const c = currentGroup;
+        if (!c || c.step === 0)
+            return;
+        for (let i = 0; i < groups.length; ++i)
+            if (groups[i].callName === c.callName && groups[i].callK === c.callK && groups[i].step === n) {
+                select(i);
+                return;
+            }
     }
 
     // open a run file (a URL; also called from the command line and by drag and drop)
@@ -193,7 +278,7 @@ ApplicationWindow {
         const out = [];
         for (let i = 0; i < groups.length; ++i) {
             select(i);
-            const base = {kind: groups[i].kind, k: groups[i].k, messages: rows.length};
+            const base = {kind: groups[i].kind, k: groups[i].k, messages: rows.length, call: groups[i].callName || "", callK: groups[i].callK || 0, step: groups[i].step || 0};
             if (!hasTree) {
                 out.push(Object.assign(base, {tree: false}));
                 continue;
@@ -221,6 +306,10 @@ ApplicationWindow {
                 return;
             }
         select(0);
+    }
+    function select3dLocality(loc) {     // test: look at a cube of the 3D tree
+        if (tree3d.item)
+            tree3d.item.select(loc);
     }
     function showView(mode) {
         viewMode = mode;
@@ -304,7 +393,7 @@ ApplicationWindow {
             list.push({kind: rws[0].kind, k: rws[0].idx, rows: rws, start: start, end: end, lost: lostByKey[key] || []});
             total[rws[0].kind] = (total[rws[0].kind] || 0) + 1;
         }
-        list.sort((a, b) => a.start - b.start);
+        linkCalls(list);                                       // the steps of one call stay together, in the order of the algorithm
         for (const g of list)
             g.total = total[g.kind];
         let bytes = 0, parcels = 0;
@@ -442,7 +531,7 @@ ApplicationWindow {
         hoverIndex = -1;
         buildLanes();
         buildBroadcastModel();
-        if (viewMode === "tree" && !hasTree)
+        if ((viewMode === "tree" || viewMode === "tree3d") && !hasTree)
             viewMode = "locality";
         strip.requestPaint();
         waterfall.requestPaint();
@@ -1001,13 +1090,26 @@ ApplicationWindow {
                     ? hpxWindow.rows.length + " messages, " + hpxWindow.fmtUs(hpxWindow.groupSpan) + " in total"
                     : ""
             }
+            // a group that is a step of a larger call: the other steps of the same call
+            Label { color: "#ffb74d"; text: "same call:"; visible: !!hpxWindow.currentGroup && hpxWindow.currentGroup.step > 0 }
+            Repeater {
+                model: hpxWindow.currentGroup && hpxWindow.currentGroup.step > 0 ? hpxWindow.currentGroup.stepNames : []
+                delegate: Button {
+                    required property var modelData
+                    required property int index
+                    text: (index + 1) + " " + modelData
+                    checkable: true
+                    checked: !!hpxWindow.currentGroup && hpxWindow.currentGroup.step === index + 1
+                    onClicked: hpxWindow.selectStep(index + 1)
+                }
+            }
             Item { Layout.fillWidth: true }
         }
 
         // what is in this group: how many messages, how much data, where the time goes
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: hpxWindow.showPath ? 150 : 124
+            Layout.preferredHeight: hpxWindow.treeView ? (hpxWindow.showPath ? 68 : 40) : (hpxWindow.showPath ? 150 : 124)
             visible: run.loaded && hpxWindow.groups.length > 0
             color: "#3a3a3a"
             border.color: "#2b2b2b"
@@ -1040,7 +1142,7 @@ ApplicationWindow {
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
-                    visible: hpxWindow.showPath
+                    visible: hpxWindow.showPath && !hpxWindow.treeView
                     readonly property real total: Math.max(hpxWindow.pathPrepare + hpxWindow.pathMpi + hpxWindow.pathPick + hpxWindow.pathParent + hpxWindow.pathAction, 1e-9)
                     Repeater {
                         model: [
@@ -1078,6 +1180,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 18
+                    visible: !hpxWindow.treeView
                     Label { color: "#999999"; text: "Time of all messages added up (they run in parallel, so more than wall clock):" }
                     Label { color: hpxWindow.mpiColor; font.bold: true; text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) }
                     Label { color: hpxWindow.recvColor; font.bold: true; text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) }
@@ -1090,6 +1193,7 @@ ApplicationWindow {
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: hpxWindow.showPath ? 8 : 24
+                    visible: !hpxWindow.treeView
                     readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumParent + hpxWindow.sumAction, 1e-9)
                     Repeater {
                         model: [
@@ -1129,7 +1233,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 18
-                    visible: !hpxWindow.showPath && hpxWindow.rows.length > 0
+                    visible: !hpxWindow.showPath && hpxWindow.rows.length > 0 && !hpxWindow.treeView
                     Label { color: "#999999"; text: "per message:" }
                     Label { color: hpxWindow.mpiColor; font.bold: true
                             text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi / Math.max(hpxWindow.rows.length, 1))
@@ -1170,6 +1274,20 @@ ApplicationWindow {
                         ctx.fillStyle = i === hpxWindow.current ? "#ffffff" : (g.kind === "burst" ? "#6b6b6b" : "#6fa8dc");
                         ctx.fillRect(pad + i * bw + 1, height - 6 - h, Math.max(bw - 2, 1), h);
                     }
+                    // the steps of one call are joined by a line under their bars
+                    ctx.strokeStyle = "#ffb74d"; ctx.lineWidth = 2;
+                    for (let i = 0; i < n; ++i) {
+                        const g = hpxWindow.groups[i];
+                        if (g.step !== 1)
+                            continue;
+                        const last = i + g.steps - 1;
+                        if (last >= n || hpxWindow.groups[last].callName !== g.callName || hpxWindow.groups[last].callK !== g.callK)
+                            continue;
+                        const x0 = pad + i * bw + 1, x1 = pad + (last + 1) * bw - 1;
+                        ctx.beginPath();
+                        ctx.moveTo(x0, height - 5); ctx.lineTo(x0, height - 2); ctx.lineTo(x1, height - 2); ctx.lineTo(x1, height - 5);
+                        ctx.stroke();
+                    }
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -1188,6 +1306,7 @@ ApplicationWindow {
             Button { text: "By locality"; checkable: true; checked: hpxWindow.viewMode === "locality"; onClicked: { hpxWindow.viewMode = "locality"; lanes.requestPaint(); } }
             Button { text: "By message"; checkable: true; checked: hpxWindow.viewMode === "message"; onClicked: { hpxWindow.viewMode = "message"; waterfall.requestPaint(); } }
             Button { text: "Tree"; visible: hpxWindow.hasTree; checkable: true; checked: hpxWindow.viewMode === "tree"; onClicked: { hpxWindow.viewMode = "tree"; tree.requestPaint(); } }
+            Button { text: "3D tree"; visible: hpxWindow.hasTree; checkable: true; checked: hpxWindow.viewMode === "tree3d"; onClicked: hpxWindow.viewMode = "tree3d" }
             Button { text: "Reset zoom"; onClicked: hpxWindow.select(hpxWindow.current) }
             Button {
                 text: "Critical path"
@@ -1636,6 +1755,39 @@ ApplicationWindow {
                 }
             }
 
+            // ---------------------------------------------------------------- view 4: the tree in 3D, with the nodes of the cluster
+            // loaded only when it is asked for: it needs Qt Quick 3D and a graphics card; if that is missing only this view is lost
+            Loader {
+                id: tree3d
+                anchors.fill: parent
+                active: hpxWindow.viewMode === "tree3d" && hpxWindow.hasTree
+                visible: hpxWindow.viewMode === "tree3d"
+                source: "Tree3D.qml"
+                onLoaded: bind()
+                function bind() {
+                    if (!item)
+                        return;
+                    item.mode = hpxWindow.tree3dMode;
+                    item.showSend = hpxWindow.tree3dSend;
+                    item.showRecv = hpxWindow.tree3dRecv;
+                    item.win = hpxWindow;
+                    item.treeUp = Qt.binding(() => hpxWindow.treeUp);
+                    item.treeDepth = Qt.binding(() => hpxWindow.treeDepth);
+                    item.hostOf = Qt.binding(() => hpxWindow.hostInfo.of);
+                    item.hostNames = Qt.binding(() => hpxWindow.hostInfo.names);
+                    item.crit = Qt.binding(() => hpxWindow.criticalOn);
+                    item.pathChain = Qt.binding(() => hpxWindow.pathChain);
+                    item.edges = Qt.binding(() => hpxWindow.treeEdges);
+                    item.nodes = Qt.binding(() => hpxWindow.treeNodes);
+                }
+                Label {
+                    anchors.centerIn: parent
+                    visible: tree3d.status === Loader.Error
+                    color: "#ffb74d"
+                    text: "The 3D view is not available here (Qt Quick 3D could not be loaded). The other views work as usual."
+                }
+            }
+
             // ---------------------------------------------------------------- view 2: one row per message
             Canvas {
                 id: waterfall
@@ -1830,7 +1982,7 @@ ApplicationWindow {
         // legend (wraps in a narrow window) and the details of what is under the mouse
         Flow {
             Layout.fillWidth: true
-            visible: run.loaded
+            visible: run.loaded && !hpxWindow.treeView
             spacing: 12
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.waitColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "waits for data" } }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.preColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX prepares" } }
@@ -1859,7 +2011,7 @@ ApplicationWindow {
         }
         Label {
             Layout.fillWidth: true
-            visible: run.loaded
+            visible: run.loaded && hpxWindow.viewMode !== "tree3d"
             color: "#dddddd"
             elide: Text.ElideRight
             text: {

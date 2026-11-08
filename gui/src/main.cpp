@@ -24,7 +24,8 @@ void wait(int ms)
 }
 
 // Headless preview: eduhpx run.csv --render out_dir kind:k:view ...   (QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software)
-// writes one PNG per "kind:k:view", e.g. broadcast:3:tree burst:9:locality (view: locality | message | tree).
+// writes one PNG per "kind:k:view", e.g. broadcast:3:tree burst:9:locality (view: locality | message | tree | tree3d;
+// tree3d needs a real graphics window: not QT_QPA_PLATFORM=offscreen with the software backend).
 int render(QQuickWindow *window, QObject *root, const QString &dir, const QStringList &specs)
 {
     QDir().mkpath(dir);
@@ -60,6 +61,45 @@ int render(QQuickWindow *window, QObject *root, const QString &dir, const QStrin
                 std::printf("SCROLL step %d scrollY=%f contentH=%f\n", i, root->property("scrollY").toDouble(), root->property("contentH").toDouble());
             }
         }
+        if (!qEnvironmentVariable("EDUHPX_3D_SELECT").isEmpty()) {     // test: the 3D tree looks at this locality
+            QMetaObject::invokeMethod(root, "select3dLocality", Q_ARG(QVariant, qEnvironmentVariable("EDUHPX_3D_SELECT").toInt()));
+            wait(900);
+        }
+        if (!qEnvironmentVariable("EDUHPX_CLICK").isEmpty()) {     // test: a mouse click at "x,y" (window coordinates)
+            const QStringList xy = qEnvironmentVariable("EDUHPX_CLICK").split(QLatin1Char(','));
+            if (xy.size() == 2) {
+                const QPointF pos(xy[0].toDouble(), xy[1].toDouble());
+                QMouseEvent move(QEvent::MouseMove, pos, window->mapToGlobal(pos.toPoint()), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &move);
+                wait(150);
+                QMouseEvent press(QEvent::MouseButtonPress, pos, window->mapToGlobal(pos.toPoint()), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &press);
+                wait(60);
+                QMouseEvent release(QEvent::MouseButtonRelease, pos, window->mapToGlobal(pos.toPoint()), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &release);
+                wait(700);
+            }
+        }
+        if (!qEnvironmentVariable("EDUHPX_3D_WHEEL").isEmpty()) {     // test: scroll out (this many steps) in the middle of the window
+            const QPointF pos(window->width() / 2.0, window->height() / 2.0);
+            for (int i = 0; i < qEnvironmentVariable("EDUHPX_3D_WHEEL").toInt(); ++i) {
+                QWheelEvent w(pos, window->mapToGlobal(pos.toPoint()), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &w);
+                wait(40);
+            }
+            wait(700);
+        }
+        if (!qEnvironmentVariable("EDUHPX_HOVER").isEmpty()) {     // test: mouse pointer at "x,y" (window coordinates), e.g. over a line of the 3D tree
+            const QStringList xy = qEnvironmentVariable("EDUHPX_HOVER").split(QLatin1Char(','));
+            if (xy.size() == 2) {
+                const QPointF pos(xy[0].toDouble(), xy[1].toDouble());
+                for (int i = 0; i < 3; ++i) {
+                    QMouseEvent move(QEvent::MouseMove, pos + QPointF(i, 0), window->mapToGlobal(pos.toPoint()), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                    QCoreApplication::sendEvent(window, &move);
+                    wait(150);
+                }
+            }
+        }
         const QString file = QDir(dir).filePath(part[0] + part[1] + QLatin1Char('_') + part[2] + QLatin1String(".png"));
         const QImage image = window->grabWindow();
         if (image.isNull() || !image.save(file)) {
@@ -79,7 +119,7 @@ int main(int argc, char *argv[])
     qputenv("QML_XHR_ALLOW_FILE_READ", "1");
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("EduHPX"));
-    QGuiApplication::setApplicationVersion(QStringLiteral("0.0.2"));
+    QGuiApplication::setApplicationVersion(QStringLiteral("0.0.3"));
     QGuiApplication::setOrganizationName(QStringLiteral("EduHPX"));
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/qt/qml/EduHPX/assets/icon_256.png")));
     QQuickStyle::setStyle(QStringLiteral("Fusion"));
@@ -125,6 +165,12 @@ int main(int argc, char *argv[])
             QMetaObject::invokeMethod(root, "showStartPage");   // test: back to the start page after a run was loaded
         if (qEnvironmentVariable("EDUHPX_CRITICAL") == QLatin1String("1"))
             root->setProperty("criticalOn", true);    // preview with the critical path button on
+        if (!qEnvironmentVariable("EDUHPX_3D_MODE").isEmpty())
+            root->setProperty("tree3dMode", qEnvironmentVariable("EDUHPX_3D_MODE"));   // preview of the 3D tree: ratio | send | recv | arrival
+        if (qEnvironmentVariable("EDUHPX_3D_LINES") == QLatin1String("send") || qEnvironmentVariable("EDUHPX_3D_LINES") == QLatin1String("recv")) {
+            root->setProperty("tree3dSend", qEnvironmentVariable("EDUHPX_3D_LINES") == QLatin1String("send"));    // only the send or only the receive lines
+            root->setProperty("tree3dRecv", qEnvironmentVariable("EDUHPX_3D_LINES") == QLatin1String("recv"));
+        }
         if (!qEnvironmentVariable("EDUHPX_ARROWS").isEmpty())
             root->setProperty("arrowFilter", qEnvironmentVariable("EDUHPX_ARROWS"));   // preview with the Data / Requests filter
         // the views are named after the positional arguments that follow the file

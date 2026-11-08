@@ -2,7 +2,9 @@
 
 A text file, UTF-8, one row per HPX message. Lines that start with `#` are metadata, the first line must be
 `# eduhpx_run_csv 1`. The other `#` lines hold `key=value` pairs separated by blanks (`run`, `localities`, `nodes`, `program`,
-`grouping`, ...; unknown keys are ignored; `run` is shown in the title). The first line that is not a comment is the column header.
+`grouping`, `locality_nodes`, ...; unknown keys are ignored; `run` is shown in the title). `locality_nodes` is the list of the node names,
+separated by commas, one per locality in the order of the locality number (`compute-01,compute-01,compute-02,...`, `?` = unknown); the
+viewer draws the nodes in the 3D view of the tree from it. Without it the 3D view assumes that the localities are spread evenly over the nodes. The first line that is not a comment is the column header.
 Fields are separated by commas; a field with a comma or a quote is in double quotes (`""` is a quote), as in RFC 4180.
 Columns are found by name, their order does not matter, unknown columns are ignored.
 

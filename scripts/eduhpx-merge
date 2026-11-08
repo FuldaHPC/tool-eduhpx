@@ -47,13 +47,14 @@ def write_rows(run_dir):
     paths = sorted(glob.glob(os.path.join(run_dir, "eduhpx.mpi.*.bin")))
     if not paths:
         sys.exit("%s: no eduhpx.mpi.<rank>.bin files (run with the measuring MPI, EDUHPX_MPI_LOG_DIR set)" % run_dir)
-    nodes, n = set(), 0
+    nodes, n, node_of = set(), 0, {}
     with open(os.path.join(run_dir, "edumpi_rows.csv"), "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["function", "processorname", "processrank", "partnerrank", "end_us", "dur_us", "senddatasize", "recvdatasize"])
         for path in paths:
             rank, node, recs = read_bin(path)
             nodes.add(node)
+            node_of[rank] = node
             for func, start, endt, done, sb, rb, partner, flags in recs:
                 if func == "MPI_Isend" and endt:
                     w.writerow(["MPI_Isend", node, rank, partner, int(endt / 1000), (endt - start) / 1000.0, sb, 0])
@@ -63,7 +64,7 @@ def write_rows(run_dir):
                     # end = arrival of the message, duration = time since the receive was posted
                     w.writerow(["MPI_Irecv", node, rank, partner, int(done / 1000), (done - start) / 1000.0, 0, rb])
                     n += 1
-    return len(paths), len(nodes), n
+    return len(paths), len(nodes), n, node_of
 
 
 def main():
@@ -79,7 +80,7 @@ def main():
     run_dir = os.path.abspath(a.run_dir)
     out = a.output or os.path.join(run_dir, "run.csv")
     name = a.run or os.path.basename(run_dir)
-    ranks, nodes, nrecv = write_rows(run_dir)
+    ranks, nodes, nrecv, node_of = write_rows(run_dir)
     print("eduhpx-merge: %d MPI logs from %d node(s), %d completed receives" % (ranks, nodes, nrecv))
     tmp = os.path.join(run_dir, "merged.json")
     sys.argv = ["eduhpx-merge", run_dir, "--run-id", "0", "--header-bytes", str(a.header_bytes), "-o", tmp]
@@ -103,6 +104,9 @@ def main():
         f.write("# eduhpx_run_csv 1\n")
         meta = ["run=%s" % name, "localities=%d" % len(d.get("localities", [])), "nodes=%d" % nodes,
                 "grouping=%s" % d.get("grouping", "").replace(" ", "_")]
+        if node_of:     # the node of every locality (HPX locality = MPI rank), in order of the locality number
+            meta.append("locality_nodes=%s" % ",".join(
+                node_of.get(r, "?").replace(" ", "_").replace(",", "_") for r in range(max(node_of) + 1)))
         if a.program:
             meta.append("program=%s" % a.program)
         f.write("# " + " ".join(meta) + "\n")

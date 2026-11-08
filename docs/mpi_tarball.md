@@ -3,10 +3,13 @@
 The measuring MPI (Open MPI with the EduMPI instrumentation, no database) lives on the branch `eduhpx_mpi_data` of
 the EduMPI repository. Users get it as a source tarball, so they need no autotools and no Sphinx.
 
-Current file: `eduhpx_mpi_data-5.0.11rc1-eduhpx1.tar.gz` (57 MB), checked with a build from the unpacked archive and a
+Current file: `eduhpx_mpi_data-5.0.11rc1-eduhpx1.tar.gz` (57 MB, SHA-256 `64e1324acf5888861e042e5ad05afc351cf6ed2d5a75d667cf0322d01d5fa1d3`), attached to the release 0.0.3 of EduHPX, checked with a build from the unpacked archive and a
 test run with UCX and ob1 (4 ranks, `tools/eduhpx_mpi_test.c`, files read with `tools/eduhpx_dump.py`).
 
 ## Build from the tarball (user)
+
+`scripts/install-mpi.sh --prefix ~/eduhpx_mpi --tarball <file>` does the following steps, checks the SHA-256 and runs a test.
+By hand:
 
     tar xzf eduhpx_mpi_data-5.0.11rc1-eduhpx1.tar.gz
     cd eduhpx_mpi_data-5.0.11rc1-eduhpx1
@@ -30,7 +33,7 @@ Needs a C compiler and make; UCX (development files) only for the UCX transport.
 5. Rename the top directory to `eduhpx_mpi_data-<version>-eduhpx<n>`, pack it again, write the SHA-256 file.
 6. Test with the archive only: unpack, `configure` (without Sphinx in the PATH), `make`, `make install`, run
    `tools/eduhpx_mpi_test.c` with `OMPI_MCA_pml=ucx` and `ob1`, read the files with `tools/eduhpx_dump.py`.
-7. Upload the archive and the `.sha256` file to a release of the EduMPI repository.
+7. Attach the archive and the `.sha256` file to the release of EduHPX, and put the new checksum (`MPI_TARBALL_SHA256`) and download address (`MPI_URL`) into `scripts/install-mpi.sh`.
 
 Time on the cluster (16 cores, node-local disk): autogen 5 min, configure 17 min, `make dist` 9 min, build from the
 archive 35 min. Never build on the shared home directory, it is too slow. The work of step 1 is the real effort.
