@@ -10,9 +10,9 @@ Collectives (broadcast ...) are grouped, drawn as a tree and analysed along thei
 
 *One broadcast of 16 localities on 4 nodes: green = MPI send, red = MPI receive, blue frame = time in MPI, the rest is HPX.*
 
-<p align="center"><img src="screenshots/3d_tree_send_recv_ratio.png" alt="A broadcast as a tree in 3D, with the nodes of the cluster" width="900"></p>
+<p align="center"><img src="screenshots/3d_tree_flat_broadcast_8_nodes.png" alt="A flat broadcast of 64 localities on 8 nodes, in 3D" width="900"></p>
 
-*New in 0.0.3, the tree in 3D: every node of the cluster is a glass cube with its localities inside (the first node bottom left), green lines are sends, red lines are receives (each can be switched off), and the colour of a locality shows whether it sent or received more, who sent or received the most, or when the data arrived. Click a cube to look at it. Gold = critical path.*
+*New in 0.0.3, the tree in 3D: a flat broadcast of 64 localities on 8 nodes. Every node of the cluster is a glass cube with its localities inside (the first node bottom left), green lines are sends, red lines are receives (each can be switched off). L#0 on compute-00 sent to all others, so it is green and all others are red. Other views colour the localities by who sent or received the most, or by when the data arrived. Click a cube to look at it; the critical path is shown in gold.*
 
 ## Why EduHPX?
 
