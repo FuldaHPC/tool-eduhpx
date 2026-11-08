@@ -2,7 +2,7 @@ name: Windows
 
 env:
   QT_VERSION: 6.8.1
-  APP_VERSION: 0.0.2
+  APP_VERSION: 0.0.3
 
 on:
   workflow_call:
@@ -23,6 +23,7 @@ jobs:
           target: desktop
           arch: win64_mingw
           tools: 'tools_mingw1310 tools_cmake tools_ninja'
+          modules: 'qtquick3d'      # the 3D tree
           cache: true
 
       - name: Configure and build

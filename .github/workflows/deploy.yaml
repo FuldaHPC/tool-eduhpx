@@ -3,7 +3,7 @@
 name: Deploy EduHPX
 
 env:
-  APP_VERSION: 0.0.2
+  APP_VERSION: 0.0.3
 
 on:
   push:
@@ -50,11 +50,6 @@ jobs:
         with:
           tag_name: v${{ env.APP_VERSION }}
           name: EduHPX_${{ env.APP_VERSION }}
-          body: |
-            EduHPX ${{ env.APP_VERSION }}: viewer for HPX parcels and MPI messages on one timeline.
-            - Linux: `EduHPX_${{ env.APP_VERSION }}-x86_64.AppImage` (make it executable, then start it)
-            - macOS: `EduHPX_${{ env.APP_VERSION }}.dmg` (if macOS blocks the app: see the README of the repository, section macOS)
-            - Windows: `EduHPX_${{ env.APP_VERSION }}-windows.zip` (unpack, start `eduhpx.exe`)
-            - `EduHPX_${{ env.APP_VERSION }}_examples.zip`: the example run files (they are also built into the app: File > Examples)
+          body_path: docs/release-notes/${{ env.APP_VERSION }}.md
           files: release-files/*
           fail_on_unmatched_files: true

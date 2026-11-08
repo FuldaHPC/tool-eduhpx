@@ -2,7 +2,7 @@ name: AppImage
 
 env:
   QT_VERSION: 6.8.1
-  APP_VERSION: 0.0.2
+  APP_VERSION: 0.0.3
 
 on:
   workflow_call:
@@ -23,6 +23,7 @@ jobs:
           target: 'desktop'
           arch: 'linux_gcc_64'
           tools: 'tools_cmake'
+          modules: 'qtquick3d'      # the 3D tree
           cache: true
 
       - name: Install system libraries
