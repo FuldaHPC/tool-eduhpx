@@ -75,19 +75,58 @@ Item {
     onNodesChanged: { layout = computeLayout(); resetView(); }
     onHostOfChanged: layout = computeLayout()
 
-    function resetView() {
+    // the point the camera looks at (the middle of the scene, or the cube that was clicked) and the locality that was clicked
+    property real tx: 0
+    property real ty: 0
+    property real tz: 0
+    property int selected: -1
+    function resetView() {                // back to the overview
+        selected = -1;
         yaw = 12; pitch = 9;
         userZoomed = false;
-        fitView();
+        goTo(0, 0, 0, fitDistance());
+    }
+    function select(loc) {                // fly to a cube
+        const q = layout.pos[loc];
+        if (!q)
+            return;
+        selected = loc;
+        userZoomed = true;
+        goTo(q.x, q.y, q.z, Math.max(90, layout.size * 6));
+    }
+    function goTo(x, y, z, d) {
+        focusAnimation.stop();
+        if (!isFinite(d) || view.width < 10) {
+            tx = x; ty = y; tz = z;
+            if (isFinite(d))
+                dist = d;
+            return;
+        }
+        animTx.to = x; animTy.to = y; animTz.to = z; animDist.to = d;
+        focusAnimation.start();
+    }
+    ParallelAnimation {
+        id: focusAnimation
+        NumberAnimation { id: animTx; target: root; property: "tx"; duration: 350; easing.type: Easing.InOutQuad }
+        NumberAnimation { id: animTy; target: root; property: "ty"; duration: 350; easing.type: Easing.InOutQuad }
+        NumberAnimation { id: animTz; target: root; property: "tz"; duration: 350; easing.type: Easing.InOutQuad }
+        NumberAnimation { id: animDist; target: root; property: "dist"; duration: 350; easing.type: Easing.InOutQuad }
     }
     // the distance at which the whole scene fills the window (the camera sees 60 degrees vertically)
     property bool userZoomed: false
-    function fitView() {
-        if (userZoomed || view.width < 10 || view.height < 10)
-            return;
+    function fitDistance() {
+        if (view.width < 10 || view.height < 10)
+            return NaN;
         const half = Math.tan(30 * Math.PI / 180), aspect = view.width / Math.max(view.height, 10);
         const w = layout.width + layout.depth * 0.35 + 60, h = layout.height + 90;      // + room for the names below the cubes
-        dist = Math.max(250, Math.max(h / 2 / half, w / 2 / (half * aspect)) * 1.12 + layout.depth / 2);
+        return Math.max(250, Math.max(h / 2 / half, w / 2 / (half * aspect)) * 1.12 + layout.depth / 2);
+    }
+    function fitView() {
+        if (userZoomed)
+            return;
+        const d = fitDistance();
+        if (isFinite(d))
+            dist = d;
     }
     Component.onCompleted: resetView()
 
@@ -252,6 +291,7 @@ Item {
 
         Node {
             id: rig
+            position: Qt.vector3d(root.tx, root.ty, root.tz)
             eulerRotation: Qt.vector3d(-root.pitch, root.yaw, 0)
             PerspectiveCamera {
                 id: cam
@@ -294,6 +334,8 @@ Item {
                 position: p
                 Model {
                     source: "#Cube"
+                    pickable: true
+                    property int locId: modelData.loc
                     scale: Qt.vector3d(k, k, k)
                     materials: DefaultMaterial {
                         diffuseColor: root.colorOf(modelData.loc)
@@ -320,6 +362,17 @@ Item {
                             }
                         }
                         cullMode: Material.NoCulling
+                    }
+                }
+                Model {                                   // a blue frame around the cube that was clicked
+                    visible: root.selected === modelData.loc
+                    source: "#Cube"
+                    scale: Qt.vector3d(k * 1.22, k * 1.22, k * 1.22)
+                    materials: DefaultMaterial {
+                        diffuseColor: "#2979ff"
+                        lighting: DefaultMaterial.NoLighting
+                        opacity: 0.4
+                        depthDrawMode: Material.NeverDepthDraw
                     }
                 }
                 Model {                                   // a gold frame around the localities of the critical path
@@ -355,7 +408,8 @@ Item {
                 }
                 readonly property bool hot: root.hover === index
                 readonly property bool onPath: root.crit && modelData.data.crit
-                readonly property real alpha: (hot || onPath || !root.crit) ? 1 : 0.2
+                readonly property bool touches: root.selected >= 0 && (modelData.p === root.selected || modelData.c === root.selected)
+                readonly property real alpha: root.selected >= 0 ? (touches || hot ? 1 : 0.12) : ((hot || onPath || !root.crit) ? 1 : 0.2)
                 readonly property real r0: root.layout.size * 0.5
                 readonly property vector3d u: d.times(1 / Math.max(d.length(), 1))
                 // the lines start and end at the surface of the cubes
@@ -449,34 +503,68 @@ Item {
         }
     }
 
-    // bar at the top as in the EduMPI GUI: the heading, the view to choose, the lines to show, and the colour scale
+    // a slim bar at the top: the title, the colour scale, the view to choose and the lines to show
+    component Chip: Rectangle {
+        id: chip
+        property string label
+        property bool on: true
+        property color tint: "#555555"
+        signal toggled()
+        height: 26
+        width: chipText.width + 26
+        radius: height / 2
+        color: on ? tint : "white"
+        border.color: tint
+        border.width: 1.5
+        Text {
+            id: chipText
+            anchors.centerIn: parent
+            text: chip.label
+            color: chip.on ? "white" : chip.tint
+            font.pixelSize: 12
+            font.bold: true
+        }
+        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: chip.toggled() }
+    }
     Rectangle {
         id: topBar
         anchors { left: parent.left; right: parent.right; top: parent.top }
-        height: 78
-        color: "#9e9e9e"
-        Text {
-            x: 14; y: 8
-            color: "white"
-            font.pixelSize: 16
-            font.bold: true
-            text: "3D Cluster View: " + root.modeTitles[root.mode]
-        }
-        Text {
-            x: 14; y: 36
-            width: parent.width - 28
-            color: "#f2f2f2"
-            font.pixelSize: 11
-            wrapMode: Text.WordWrap
-            maximumLineCount: 2
-            text: root.modeTips[root.mode].replace(/\n/g, "  ")
+        height: 42
+        color: "#f2f2f2"
+        Rectangle { anchors { left: parent.left; right: parent.right; bottom: parent.bottom } height: 1; color: "#d6d6d6" }
+        Row {
+            anchors { left: parent.left; leftMargin: 14; verticalCenter: parent.verticalCenter }
+            spacing: 8
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                color: "#333333"; font.pixelSize: 14; font.bold: true
+                text: "3D cluster"
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                color: "#666666"; font.pixelSize: 13
+                text: root.modeTitles[root.mode]
+            }
+            Rectangle {                                    // what the colours mean, on hover
+                id: infoDot
+                anchors.verticalCenter: parent.verticalCenter
+                width: 16; height: 16; radius: 8
+                color: "transparent"; border.color: "#888888"
+                Text { anchors.centerIn: parent; text: "i"; color: "#777777"; font.pixelSize: 10; font.bold: true }
+                MouseArea { id: infoArea; anchors.fill: parent; hoverEnabled: true }
+                ToolTip.visible: infoArea.containsMouse
+                ToolTip.delay: 200
+                ToolTip.text: root.modeTips[root.mode]
+            }
         }
         Row {
-            anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 6 }
-            spacing: 10
+            id: controls
+            anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+            spacing: 8
             ComboBox {
                 id: modeBox
-                width: 250
+                width: 236; height: 28
+                font.pixelSize: 12
                 model: [
                     {text: "send/recv ratio (per process)", key: "ratio"},
                     {text: "max send ratio (across all processes)", key: "send"},
@@ -486,56 +574,101 @@ Item {
                 textRole: "text"
                 currentIndex: ({ratio: 0, send: 1, recv: 2, arrival: 3})[root.mode]
                 onActivated: root.mode = model[currentIndex].key
+                background: Rectangle { radius: 6; color: "white"; border.color: modeBox.activeFocus ? "#2979ff" : "#c4c4c4" }
+                contentItem: Text {
+                    leftPadding: 10; rightPadding: 24
+                    text: modeBox.displayText; font: modeBox.font; color: "#333333"
+                    verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                }
+                indicator: Text { x: modeBox.width - width - 10; y: (modeBox.height - height) / 2; text: "\u25BE"; color: "#666666"; font.pixelSize: 12 }
             }
-            CheckBox {
-                text: "Send lines"
-                checked: root.showSend
-                onToggled: root.showSend = checked
-                contentItem: Text { text: parent.text; leftPadding: parent.indicator.width + 6; color: "#0a7a2f"; font.bold: true; verticalAlignment: Text.AlignVCenter }
+            Chip { label: "Send"; tint: "#00a152"; on: root.showSend; onToggled: root.showSend = !root.showSend }
+            Chip { label: "Recv"; tint: "#d32f2f"; on: root.showRecv; onToggled: root.showRecv = !root.showRecv }
+        }
+        // the colour scale
+        Row {
+            id: scale
+            visible: root.width > 1150
+            anchors { right: controls.left; rightMargin: 22; verticalCenter: parent.verticalCenter }
+            spacing: 7
+            Rectangle {                                    // white: no communication
+                visible: root.mode === "ratio"
+                width: 12; height: 12; radius: 2; color: "white"; border.color: "#999999"
+                anchors.verticalCenter: parent.verticalCenter
             }
-            CheckBox {
-                text: "Recv lines"
-                checked: root.showRecv
-                onToggled: root.showRecv = checked
-                contentItem: Text { text: parent.text; leftPadding: parent.indicator.width + 6; color: "#b71c1c"; font.bold: true; verticalAlignment: Text.AlignVCenter }
+            Text { visible: root.mode === "ratio"; color: "#666666"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter; text: "none" }
+            Text {
+                color: "#666666"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter
+                text: root.mode === "ratio" ? "sent more" : (root.mode === "arrival" ? "start" : "0")
+            }
+            Rectangle {
+                width: 150; height: 12; radius: 3
+                anchors.verticalCenter: parent.verticalCenter
+                border.color: "#aaaaaa"
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: root.mode === "arrival" ? root.heat(0) : (root.mode === "ratio" ? "#00ff00" : "white") }
+                    GradientStop { position: 0.5; color: root.mode === "arrival" ? root.heat(0.5) : (root.mode === "ratio" ? "#7f7f00" : (root.mode === "send" ? "#7fff7f" : "#ff7f7f")) }
+                    GradientStop { position: 1.0; color: root.mode === "arrival" ? root.heat(1) : (root.mode === "ratio" ? "#ff0000" : (root.mode === "send" ? "#00ff00" : "#ff0000")) }
+                }
+            }
+            Text {
+                color: "#666666"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter
+                text: {
+                    if (root.mode === "ratio") return "received more";
+                    if (root.mode === "send") return root.win ? root.win.fmtSize(root.volumes.maxSend) + " sent" : "";
+                    if (root.mode === "recv") return root.win ? root.win.fmtSize(root.volumes.maxRecv) + " received" : "";
+                    return root.win ? "+" + root.win.fmtUs(root.arrivalMax) : "";
+                }
             }
         }
     }
-    // the colour scale (below the bar, on the white of the scene)
-    Row {
-        id: scale
-        anchors { right: parent.right; rightMargin: 14; top: topBar.bottom; topMargin: 8 }
-        spacing: 8
-        z: 2
-        Rectangle {                                       // white: no communication
-            visible: root.mode === "ratio"
-            width: 14; height: 14; radius: 2; color: "white"; border.color: "#888888"
-            anchors.verticalCenter: parent.verticalCenter
+
+    // the cube that was clicked: what it did in this group
+    function selectedText() {
+        if (selected < 0)
+            return "";
+        const host = hostNames[hostOf[selected]] || "";
+        let sentN = 0, recvN = 0, parent = -1;
+        const kids = [];
+        for (const e of edges) {
+            for (const m of [e.data, e.req])
+                if (m) {
+                    if (m.src === selected) sentN++;
+                    if (m.dst === selected) recvN++;
+                }
+            if (e.c === selected) parent = e.p;
+            if (e.p === selected) kids.push(e.c);
         }
-        Text { visible: root.mode === "ratio"; color: "#555555"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter; text: "no communication" }
+        const fmt = win ? win.fmtSize : (v => v + " B"), us = win ? win.fmtUs : (v => v + " us");
+        return "L#" + selected + (host ? "  on " + host : "")
+               + "\nsent " + fmt(volumes.send[selected] || 0) + " in " + sentN + (sentN === 1 ? " message" : " messages")
+               + "\nreceived " + fmt(volumes.recv[selected] || 0) + " in " + recvN + (recvN === 1 ? " message" : " messages")
+               + (selected in arrival && arrival[selected] > 0 ? "\n" + (treeUp ? "had the data of all its children at +" : "data arrived at +") + us(arrival[selected]) : "")
+               + (parent >= 0 ? "\nparent L#" + parent : "\nroot of the tree")
+               + (kids.length > 0 ? "\n" + (kids.length > 6 ? kids.length + " children" : "children " + kids.map(k => "L#" + k).join(", ")) : "");
+    }
+    Rectangle {
+        id: selPanel
+        visible: root.selected >= 0
+        x: 12; y: topBar.height + 10
+        width: Math.max(selText.width, 150) + 24; height: selText.height + backChip.height + 26
+        radius: 8
+        color: "#ee262626"
+        z: 3
         Text {
-            color: "#555555"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter
-            text: root.mode === "ratio" ? "mainly send" : (root.mode === "arrival" ? "start" : "0")
+            id: selText
+            x: 12; y: 10
+            color: "white"; font.pixelSize: 12; lineHeight: 1.15
+            text: root.selectedText()
         }
         Rectangle {
-            width: 220; height: 14; radius: 2
-            anchors.verticalCenter: parent.verticalCenter
-            border.color: "#888888"
-            gradient: Gradient {
-                orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: root.mode === "arrival" ? root.heat(0) : (root.mode === "ratio" ? "#00ff00" : "white") }
-                GradientStop { position: 0.5; color: root.mode === "arrival" ? root.heat(0.5) : (root.mode === "ratio" ? "#7f7f00" : (root.mode === "send" ? "#7fff7f" : "#ff7f7f")) }
-                GradientStop { position: 1.0; color: root.mode === "arrival" ? root.heat(1) : (root.mode === "ratio" ? "#ff0000" : (root.mode === "send" ? "#00ff00" : "#ff0000")) }
-            }
-        }
-        Text {
-            color: "#555555"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter
-            text: {
-                if (root.mode === "ratio") return "mainly recv";
-                if (root.mode === "send") return root.win ? root.win.fmtSize(root.volumes.maxSend) + " sent" : "";
-                if (root.mode === "recv") return root.win ? root.win.fmtSize(root.volumes.maxRecv) + " received" : "";
-                return root.win ? "+" + root.win.fmtUs(root.arrivalMax) : "";
-            }
+            id: backChip
+            x: 12; y: selText.y + selText.height + 8
+            width: backText.width + 20; height: 24; radius: 12
+            color: "#2979ff"
+            Text { id: backText; anchors.centerIn: parent; text: "Back to overview"; color: "white"; font.pixelSize: 12; font.bold: true }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.resetView() }
         }
     }
 
@@ -572,8 +705,9 @@ Item {
         x: 14; anchors.bottom: parent.bottom; anchors.bottomMargin: 12
         color: "#777777"
         font.pixelSize: 11
-        text: "glass cube = node, small cube = locality   green line: send (sender → receiver)   red line: receive (receiver → sender it heard from)   thick: data, thin: request"
-              + "   gold: critical path   drag: turn   wheel or pinch: zoom   double click: reset"
+        text: "green line: send   red line: receive (the arrow points to the sender it heard from)   thick: data, thin: request"
+              + (root.crit ? "   gold: critical path" : "")
+              + "   click a cube: look at it, scroll out to come back   drag: turn   wheel or pinch: zoom   double click: reset"
     }
 
     // ---------------------------------------------------------------- mouse
@@ -601,15 +735,41 @@ Item {
     WheelHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         onWheel: (e) => {
+            if (focusAnimation.running && root.selected < 0)       // flying back to the overview: let it arrive
+                return;
+            focusAnimation.stop();
+            const far = root.fitDistance();
+            const d = Math.max(root.selected >= 0 ? 50 : 120, Math.min(isFinite(far) ? far * 1.6 : 12000, root.dist * Math.pow(0.9985, e.angleDelta.y)));
+            if (root.selected >= 0 && isFinite(far) && d > far * 0.8) {      // scrolled out far enough: back to the overview
+                root.resetView();
+                return;
+            }
             root.userZoomed = true;
-            root.dist = Math.max(120, Math.min(12000, root.dist * Math.pow(0.9985, e.angleDelta.y)));
+            root.dist = d;
         }
     }
     PinchHandler {
         target: null
         property real start: 1
         onActiveChanged: if (active) { start = root.dist; root.userZoomed = true; }
-        onActiveScaleChanged: if (active) root.dist = Math.max(120, Math.min(12000, start / Math.max(activeScale, 0.05)))
+        onActiveScaleChanged: if (active) {
+            const far = root.fitDistance();
+            root.dist = Math.max(root.selected >= 0 ? 50 : 120, Math.min(isFinite(far) ? far * 1.6 : 12000, start / Math.max(activeScale, 0.05)));
+        }
     }
-    TapHandler { onDoubleTapped: root.resetView() }
+    TapHandler {
+        onTapped: (point) => {
+            if (point.position.y < topBar.height || (selPanel.visible && point.position.x < selPanel.x + selPanel.width && point.position.y < selPanel.y + selPanel.height))
+                return;
+            let loc = -1;
+            const hits = view.pickAll(point.position.x, point.position.y - topBar.height);
+            for (const h of hits)
+                if (h.objectHit && h.objectHit.locId !== undefined) { loc = h.objectHit.locId; break; }
+            if (loc < 0 || loc === root.selected)
+                root.resetView();                     // clicked beside a cube, or the same cube again
+            else
+                root.select(loc);
+        }
+        onDoubleTapped: root.resetView()
+    }
 }

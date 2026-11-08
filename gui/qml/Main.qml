@@ -69,7 +69,8 @@ ApplicationWindow {
     property int runParcels: 0
     property int skipped: 0         // parcels without MPI data (not shown)
     property int hoverIndex: -1
-    property string viewMode: "locality"   // locality | message
+    property string viewMode: "locality"   // locality | message | tree | tree3d
+    readonly property bool treeView: viewMode === "tree" || viewMode === "tree3d"   // the trees need no time breakdown and no colour legend of the lanes
     property var laneInfo: []
     property var laneMsgs: []
     property int laneHover: -1
@@ -305,6 +306,10 @@ ApplicationWindow {
                 return;
             }
         select(0);
+    }
+    function select3dLocality(loc) {     // test: look at a cube of the 3D tree
+        if (tree3d.item)
+            tree3d.item.select(loc);
     }
     function showView(mode) {
         viewMode = mode;
@@ -1104,7 +1109,7 @@ ApplicationWindow {
         // what is in this group: how many messages, how much data, where the time goes
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: hpxWindow.showPath ? 150 : 124
+            Layout.preferredHeight: hpxWindow.treeView ? (hpxWindow.showPath ? 68 : 40) : (hpxWindow.showPath ? 150 : 124)
             visible: run.loaded && hpxWindow.groups.length > 0
             color: "#3a3a3a"
             border.color: "#2b2b2b"
@@ -1137,7 +1142,7 @@ ApplicationWindow {
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
-                    visible: hpxWindow.showPath
+                    visible: hpxWindow.showPath && !hpxWindow.treeView
                     readonly property real total: Math.max(hpxWindow.pathPrepare + hpxWindow.pathMpi + hpxWindow.pathPick + hpxWindow.pathParent + hpxWindow.pathAction, 1e-9)
                     Repeater {
                         model: [
@@ -1175,6 +1180,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 18
+                    visible: !hpxWindow.treeView
                     Label { color: "#999999"; text: "Time of all messages added up (they run in parallel, so more than wall clock):" }
                     Label { color: hpxWindow.mpiColor; font.bold: true; text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi) }
                     Label { color: hpxWindow.recvColor; font.bold: true; text: "HPX " + hpxWindow.fmtUs(hpxWindow.sumHpx) }
@@ -1187,6 +1193,7 @@ ApplicationWindow {
                 Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: hpxWindow.showPath ? 8 : 24
+                    visible: !hpxWindow.treeView
                     readonly property real total: Math.max(hpxWindow.sumWait + hpxWindow.sumPre + hpxWindow.sumMpi + hpxWindow.sumPick + hpxWindow.sumParent + hpxWindow.sumAction, 1e-9)
                     Repeater {
                         model: [
@@ -1226,7 +1233,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 18
-                    visible: !hpxWindow.showPath && hpxWindow.rows.length > 0
+                    visible: !hpxWindow.showPath && hpxWindow.rows.length > 0 && !hpxWindow.treeView
                     Label { color: "#999999"; text: "per message:" }
                     Label { color: hpxWindow.mpiColor; font.bold: true
                             text: "MPI " + hpxWindow.fmtUs(hpxWindow.sumMpi / Math.max(hpxWindow.rows.length, 1))
@@ -1975,7 +1982,7 @@ ApplicationWindow {
         // legend (wraps in a narrow window) and the details of what is under the mouse
         Flow {
             Layout.fillWidth: true
-            visible: run.loaded
+            visible: run.loaded && !hpxWindow.treeView
             spacing: 12
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.waitColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "waits for data" } }
             Row { spacing: 5; Rectangle { width: 20; height: 10; color: hpxWindow.preColor; anchors.verticalCenter: parent.verticalCenter } Label { color: "white"; text: "HPX prepares" } }
@@ -2004,7 +2011,7 @@ ApplicationWindow {
         }
         Label {
             Layout.fillWidth: true
-            visible: run.loaded
+            visible: run.loaded && hpxWindow.viewMode !== "tree3d"
             color: "#dddddd"
             elide: Text.ElideRight
             text: {

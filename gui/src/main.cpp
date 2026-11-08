@@ -61,6 +61,34 @@ int render(QQuickWindow *window, QObject *root, const QString &dir, const QStrin
                 std::printf("SCROLL step %d scrollY=%f contentH=%f\n", i, root->property("scrollY").toDouble(), root->property("contentH").toDouble());
             }
         }
+        if (!qEnvironmentVariable("EDUHPX_3D_SELECT").isEmpty()) {     // test: the 3D tree looks at this locality
+            QMetaObject::invokeMethod(root, "select3dLocality", Q_ARG(QVariant, qEnvironmentVariable("EDUHPX_3D_SELECT").toInt()));
+            wait(900);
+        }
+        if (!qEnvironmentVariable("EDUHPX_CLICK").isEmpty()) {     // test: a mouse click at "x,y" (window coordinates)
+            const QStringList xy = qEnvironmentVariable("EDUHPX_CLICK").split(QLatin1Char(','));
+            if (xy.size() == 2) {
+                const QPointF pos(xy[0].toDouble(), xy[1].toDouble());
+                QMouseEvent move(QEvent::MouseMove, pos, window->mapToGlobal(pos.toPoint()), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &move);
+                wait(150);
+                QMouseEvent press(QEvent::MouseButtonPress, pos, window->mapToGlobal(pos.toPoint()), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &press);
+                wait(60);
+                QMouseEvent release(QEvent::MouseButtonRelease, pos, window->mapToGlobal(pos.toPoint()), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &release);
+                wait(700);
+            }
+        }
+        if (!qEnvironmentVariable("EDUHPX_3D_WHEEL").isEmpty()) {     // test: scroll out (this many steps) in the middle of the window
+            const QPointF pos(window->width() / 2.0, window->height() / 2.0);
+            for (int i = 0; i < qEnvironmentVariable("EDUHPX_3D_WHEEL").toInt(); ++i) {
+                QWheelEvent w(pos, window->mapToGlobal(pos.toPoint()), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &w);
+                wait(40);
+            }
+            wait(700);
+        }
         if (!qEnvironmentVariable("EDUHPX_HOVER").isEmpty()) {     // test: mouse pointer at "x,y" (window coordinates), e.g. over a line of the 3D tree
             const QStringList xy = qEnvironmentVariable("EDUHPX_HOVER").split(QLatin1Char(','));
             if (xy.size() == 2) {
