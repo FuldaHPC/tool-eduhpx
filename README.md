@@ -50,7 +50,7 @@ Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once
 | Folder | What it is |
 |---|---|
 | [`gui/`](gui/) | The viewer (Qt 6). Opens a run file and shows the timeline. Runs on macOS, Linux and Windows. [Details and a tour of the window](gui/README.md) |
-| [`scripts/`](scripts/) | `install-hpx.sh` (patched HPX), `eduhpx-run` (run a program, get `run.csv`) and `eduhpx-merge`. Tested on a Linux cluster with Slurm. [What works and what is missing](scripts/README.md) |
+| [`scripts/`](scripts/) | `install-mpi.sh` (measuring MPI), `install-hpx.sh` (patched HPX), `eduhpx-run` (run a program, get `run.csv`) and `eduhpx-merge`. Tested on a Linux cluster with Slurm. [What works and what is missing](scripts/README.md) |
 | [`examples/`](examples/) | Ready-made run files to try the viewer |
 | [`docs/`](docs/) | Format of the run file and of the raw MPI log, HPX install notes, the measuring MPI as a tarball |
 
@@ -60,7 +60,8 @@ Copy `EduHPX.app` from the dmg to *Applications* first. This is needed only once
    flat and as a tree on 16 to 64 localities. Or open a file from `examples/`.
 2. **Measure your own program** (Linux cluster, tested with Slurm and Open MPI):
    1. Measuring MPI: the branch `eduhpx_mpi_data` of the [EduMPI repository](https://github.com/AnnaLena77/EduMPI), as a source
-      tarball ([how it is built and updated](docs/mpi_tarball.md)). *The tarball is not published as a download yet.*
+      tarball ([how it is built and updated](docs/mpi_tarball.md)): `scripts/install-mpi.sh --prefix <where> --tarball <file>`.
+      *The tarball is not published as a download yet, so the `--tarball` file has to come from us.*
    2. Patched HPX: `scripts/install-hpx.sh --mpi-prefix <measuring MPI> --prefix <where>` ([details](docs/install.md)).
    3. Run: `scripts/eduhpx-run --mpi <measuring MPI> --hpx <HPX> --out my_run -- mpirun -np 16 ./app ...`, then open
       `my_run/run.csv` with EduHPX ([details](scripts/README.md)).

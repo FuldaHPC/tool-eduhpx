@@ -5,7 +5,7 @@ What exists and what does not yet (2026-11-05). Everything was tested on one Lin
 | Script | State |
 |---|---|
 | `install-hpx.sh` | Done and tested on a Linux cluster: downloads HPX at the pinned commit, applies `../patches/hpx-ec3b59b1.patch` (parcel log), builds and installs it against a given MPI. See [../docs/install.md](../docs/install.md). Not tested on macOS. |
-| `install-mpi.sh` | Not written yet. The measuring MPI is the branch `eduhpx_mpi_data` of the EduMPI repository (database-free, writes `eduhpx.mpi.<rank>.bin`, format in [../docs/mpi_log_format.md](../docs/mpi_log_format.md)). A source tarball was built and tested (build from the archive, run with UCX and ob1) but is **not published yet**; see [../docs/mpi_tarball.md](../docs/mpi_tarball.md). Until then it is built from that tarball by hand. |
+| `install-mpi.sh` | Checks the checksum of the measuring MPI tarball, builds it from the unpacked archive, installs it and runs a small test (4 ranks, files read back). The measuring MPI is the branch `eduhpx_mpi_data` of the EduMPI repository (database-free, writes `eduhpx.mpi.<rank>.bin`, format in [../docs/mpi_log_format.md](../docs/mpi_log_format.md)). The tarball is **not published as a download yet**: until then give the file with `--tarball FILE`. See [../docs/mpi_tarball.md](../docs/mpi_tarball.md). Linux only, not tested on macOS. |
 | `eduhpx-run` | Done, tested on 4 nodes (Slurm): sets the environment, measures the clock offsets between nodes, starts the program, makes `run.csv`. One command, see below. |
 | `eduhpx-merge` | Done (called by `eduhpx-run`, can be used alone): raw logs of HPX and MPI to the run file ([../docs/run_file_format.md](../docs/run_file_format.md)). Python, standard library only. |
 

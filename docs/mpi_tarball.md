@@ -8,6 +8,9 @@ test run with UCX and ob1 (4 ranks, `tools/eduhpx_mpi_test.c`, files read with `
 
 ## Build from the tarball (user)
 
+`scripts/install-mpi.sh --prefix ~/eduhpx_mpi --tarball <file>` does the following steps, checks the SHA-256 and runs a test.
+By hand:
+
     tar xzf eduhpx_mpi_data-5.0.11rc1-eduhpx1.tar.gz
     cd eduhpx_mpi_data-5.0.11rc1-eduhpx1
     ./configure --prefix=$HOME/eduhpx_mpi --with-pmix=internal --with-hwloc=internal --with-prrte=internal
