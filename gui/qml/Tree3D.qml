@@ -192,9 +192,9 @@ Item {
         return crit && (pathChain.indexOf("L#" + loc + " ") >= 0 || pathChain.endsWith("L#" + loc));
     }
     readonly property var modeTitles: ({
-        ratio: "Send/Recv Ratio per Process",
-        send: "Max Send Ratio (All Processes)",
-        recv: "Max Recv Ratio (All Processes)",
+        ratio: "Send/Recv Ratio per Locality",
+        send: "Max Send Ratio (All Localities)",
+        recv: "Max Recv Ratio (All Localities)",
         arrival: "Arrival of the Data"
     })
     readonly property var modeTips: ({
@@ -496,7 +496,7 @@ Item {
             visible: p.z > 0
             x: p.x - width / 2
             y: p.y + topBar.height
-            text: (root.hostNames[modelData.id] || ("node " + (modelData.id + 1))) + "  (" + modelData.locs.length + ")"
+            text: (root.hostNames[modelData.id] || ("node " + (modelData.id + 1)))
             color: "#444444"
             font.pixelSize: 13
             font.bold: true
@@ -566,9 +566,9 @@ Item {
                 width: 236; height: 28
                 font.pixelSize: 12
                 model: [
-                    {text: "send/recv ratio (per process)", key: "ratio"},
-                    {text: "max send ratio (across all processes)", key: "send"},
-                    {text: "max recv ratio (across all processes)", key: "recv"},
+                    {text: "send/recv ratio (per locality)", key: "ratio"},
+                    {text: "max send ratio (across all localities)", key: "send"},
+                    {text: "max recv ratio (across all localities)", key: "recv"},
                     {text: "arrival of the data", key: "arrival"}
                 ]
                 textRole: "text"
@@ -654,12 +654,13 @@ Item {
         x: 12; y: topBar.height + 10
         width: Math.max(selText.width, 150) + 24; height: selText.height + backChip.height + 26
         radius: 8
-        color: "#ee262626"
+        color: "#262626"
+        border.color: "#555555"
         z: 3
         Text {
             id: selText
             x: 12; y: 10
-            color: "white"; font.pixelSize: 12; lineHeight: 1.15
+            color: "white"; font.pixelSize: 13; lineHeight: 1.15
             text: root.selectedText()
         }
         Rectangle {
@@ -681,13 +682,14 @@ Item {
         y: root.mouseY + 18 + height > root.height - 8 ? root.mouseY - 18 - height : root.mouseY + 18
         width: info.width + 16; height: info.height + 10
         radius: 4
-        color: "#dd303030"
+        color: "#262626"
+        border.color: "#555555"
         z: 2
         Text {
             id: info
             x: 8; y: 5
             color: "white"
-            font.pixelSize: 12
+            font.pixelSize: 13
             text: {
                 if (root.hover < 0 || root.hover >= root.edges.length || !root.win)
                     return "";
